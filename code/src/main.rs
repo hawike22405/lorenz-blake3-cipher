@@ -1,12 +1,15 @@
 use clap::Parser;
 use lorenz_blake3_cipher::cipher::{self, decrypt, encrypt};
-use rand::rngs::StdRng;
-use rand::SeedableRng;
+use rand::rngs::OsRng;
 use std::fs;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(author, version, about = "Lorenz-BLAKE3 image cipher reference (research prototype)")]
+#[command(
+    author,
+    version,
+    about = "Lorenz-BLAKE3 image cipher reference (research prototype)"
+)]
 struct Args {
     #[command(subcommand)]
     command: Commands,
@@ -28,8 +31,6 @@ enum Commands {
         height: u32,
         #[arg(long)]
         channels: u8,
-        #[arg(long, default_value_t = 42)]
-        seed: u64,
     },
     /// Decrypt a container file.
     Decrypt {
@@ -49,17 +50,19 @@ enum Commands {
     },
 }
 
-fn load_key(path: &PathBuf) -> [u8; 32] {
-    let bytes = fs::read(path).expect("failed to read key file");
+fn load_key(path: &PathBuf) -> Result<[u8; 32], Box<dyn std::error::Error>> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    fs::File::open(path)?.take(33).read_to_end(&mut bytes)?;
     if bytes.len() != 32 {
-        panic!("key file must be exactly 32 bytes");
+        return Err("key file must be exactly 32 bytes".into());
     }
     let mut k = [0u8; 32];
     k.copy_from_slice(&bytes);
-    k
+    Ok(k)
 }
 
-fn main() {
+fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     match args.command {
@@ -70,20 +73,12 @@ fn main() {
             width,
             height,
             channels,
-            seed,
         } => {
-            let master_key = load_key(&key);
-            let plaintext = fs::read(&input).expect("failed to read input");
-            let mut rng = StdRng::seed_from_u64(seed);
-            let container = encrypt(
-                &master_key,
-                &plaintext,
-                width,
-                height,
-                channels,
-                &mut rng,
-            );
-            fs::write(&output, container.serialize()).expect("failed to write output");
+            let master_key = load_key(&key)?;
+            let plaintext = read_input(&input)?;
+            let mut rng = OsRng;
+            let container = encrypt(&master_key, &plaintext, width, height, channels, &mut rng)?;
+            write_new(&output, &container.serialize())?;
             println!(
                 "wrote {} bytes ({} header + {} payload + 32 tag)",
                 container.serialize().len(),
@@ -91,25 +86,21 @@ fn main() {
                 container.payload.len()
             );
         }
-        Commands::Decrypt {
-            key,
-            input,
-            output,
-        } => {
-            let master_key = load_key(&key);
-            let buf = fs::read(&input).expect("failed to read input");
+        Commands::Decrypt { key, input, output } => {
+            let master_key = load_key(&key)?;
+            let buf = read_input(&input)?;
             let container = cipher::CiphertextContainer::deserialize(&buf)
-                .expect("failed to parse container");
+                .ok_or("failed to parse container")?;
             let plaintext = decrypt(&master_key, &container)
-                .expect("decryption failed (authentication tag mismatch or corrupt container)");
-            fs::write(&output, &plaintext).expect("failed to write output");
+                .ok_or("decryption failed (authentication tag mismatch or corrupt container)")?;
+            write_new(&output, &plaintext)?;
             println!("wrote {} decrypted bytes", plaintext.len());
         }
         Commands::Verify { key, input } => {
-            let master_key = load_key(&key);
-            let buf = fs::read(&input).expect("failed to read input");
+            let master_key = load_key(&key)?;
+            let buf = read_input(&input)?;
             let container = cipher::CiphertextContainer::deserialize(&buf)
-                .expect("failed to parse container");
+                .ok_or("failed to parse container")?;
             let keys = cipher::derive_keys(&master_key, &container.header.nonce);
             let ok = cipher::verify_tag(
                 &keys.auth_key,
@@ -124,5 +115,36 @@ fn main() {
                 std::process::exit(1);
             }
         }
+    }
+    Ok(())
+}
+
+fn read_input(path: &PathBuf) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    use std::io::Read;
+    let mut buf = Vec::new();
+    fs::File::open(path)?
+        .take((cipher::MAX_PAYLOAD + 114) as u64)
+        .read_to_end(&mut buf)?;
+    if buf.len() > cipher::MAX_PAYLOAD + 113 {
+        return Err("input exceeds 64 MiB policy".into());
+    }
+    Ok(buf)
+}
+fn write_new(path: &PathBuf, bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::Write;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path)?.write_all(bytes)?;
+    Ok(())
+}
+fn main() {
+    if let Err(e) = run() {
+        eprintln!("error: {e}");
+        std::process::exit(1);
     }
 }
