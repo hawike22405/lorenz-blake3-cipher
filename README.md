@@ -11,10 +11,10 @@ This repository contains an experimental image-byte cipher, a fixed-schedule mod
 
 ## Install and run (Linux/macOS)
 
-Install a Rust toolchain through [rustup](https://rustup.rs). The reviewed build used Rust 1.100.0 on Linux x86-64; other toolchains/platforms have not been validated here. Python 3 is needed for scripts. Do not regenerate Cargo.lock during an ordinary build.
+Install a Rust toolchain through [rustup](https://rustup.rs). The reviewed build used Rust 1.100.0 on Linux x86-64; CI also passed debug and release tests on Linux, Windows and macOS; the Bash demo and file wrappers were exercised locally on Linux. Python 3 is needed for scripts. Do not regenerate Cargo.lock during an ordinary build.
 
 ```bash
-git clone https://github.com/hawike22405/lorenz-blake3-cipher.git
+git clone --branch review/reproducibility-security https://github.com/hawike22405/lorenz-blake3-cipher.git
 cd lorenz-blake3-cipher
 bash scripts/run.sh build
 bash scripts/run.sh test
@@ -76,3 +76,4 @@ python analysis/stats.py --cipher c1.png c2.png --channel 0 --mode RGB
 No NIST SP 800-22 results, general CPA resistance, cross-platform interoperability, 256-bit security, construction-level forgery bound, matched reference speedup or publication acceptance is claimed. Nominal key length and a 32-byte tag do not establish those properties.
 
 MIT License; see LICENSE. Add confirmed author metadata and dataset permissions before submitting the manuscript.
+
