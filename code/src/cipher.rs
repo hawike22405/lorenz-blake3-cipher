@@ -7,7 +7,7 @@
  *   * key separation (encryption key vs. authentication key),
  *   * non-linear S-box substitution (replaces linear RGB XOR mixing),
  *   * explicit Fisher–Yates permutation with invertible inverse,
- *   * BLAKE3 keyed-hash authentication tag with a forgery bound of 2^-256,
+ *   * BLAKE3 keyed-hash authentication tag without a construction-level forgery proof,
  *   * fixed-point Lorenz map (avoids Float64 RK4 portability problems).
  *
  * WARNING: This is a research prototype. It has NO security proof.
@@ -16,14 +16,26 @@
  */
 
 use blake3::Hasher;
-use rand::RngCore;
+use rand::{CryptoRng, RngCore};
+use subtle::ConstantTimeEq;
+pub const MAX_PAYLOAD: usize = 64 * 1024 * 1024;
+
+pub fn payload_len(width: u32, height: u32, channels: u8) -> Option<usize> {
+    if width == 0 || height == 0 || !(1..=4).contains(&channels) {
+        return None;
+    }
+    let n = (width as usize)
+        .checked_mul(height as usize)?
+        .checked_mul(channels as usize)?;
+    (n <= MAX_PAYLOAD).then_some(n)
+}
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
 /// Container magic bytes.
-const MAGIC: &[u8; 8] = b"LRZIMG01";
+const MAGIC: &[u8; 8] = b"LRZIMG02";
 /// Header size: 8 (magic) + 4 (width) + 4 (height) + 1 (channels) + 32 (nonce) + 32 (iv).
 pub const HEADER_SIZE: usize = 81;
 /// Authentication tag size in bytes (BLAKE3 output).
@@ -41,34 +53,52 @@ const LORENZ_BETA_DEN: i64 = 3;
 // The map is iterated with a simple explicit Euler step; dt is fixed.
 
 /// Iterate the Lorenz system for `steps` using fixed-point arithmetic.
-/// Returns raw fixed-point x-state bytes after each step.
+/// Eight x-state bytes per retained step after 1000 discarded steps.
 fn lorenz_stream(seed: u64, steps: usize) -> Vec<u8> {
-    // Fixed-point state (Q32.32). Seed derives initial conditions from key material.
-    let mut x: i64 = (seed as i64).wrapping_mul(2654435761) % (i64::MAX / 4);
-    let mut y: i64 = ((seed as i64).wrapping_mul(40503) % 1000000) * 1000000;
-    let mut z: i64 = 1000000000;
-
-    // dt in fixed point: 0.01 * 2^32  (approx 42949673)
-    let dt: i64 = 42949673;
-
-    let mut out = Vec::with_capacity(steps * 4);
-
-    for _ in 0..steps {
-        // dx/dt = sigma * (y - x)
-        let dx = LORENZ_SIGMA.wrapping_mul(y.wrapping_sub(x));
-        // dy/dt = x * (rho - z) - y
-        let dy = x.wrapping_mul(LORENZ_RHO.wrapping_sub(z)).wrapping_sub(y);
-        // dz/dt = x * y - beta * z
-        let dz = x.wrapping_mul(y).wrapping_sub(LORENZ_BETA_NUM.wrapping_mul(z) / LORENZ_BETA_DEN);
-
-        // Euler step: state += dt * derivative / 2^32
-        x = x.wrapping_add(dt.wrapping_mul(dx) >> 32);
-        y = y.wrapping_add(dt.wrapping_mul(dy) >> 32);
-        z = z.wrapping_add(dt.wrapping_mul(dz) >> 32);
-
-        out.extend_from_slice(&x.to_le_bytes());
+    // Bounded initial conditions; Q32.32, simultaneous explicit Euler updates.
+    let q = 1i128 << 32;
+    let mut x = q + ((seed & 0xffff) as i128 * q / 65536);
+    let mut y = q + (((seed >> 16) & 0xffff) as i128 * q / 65536);
+    let mut z = q + ((seed >> 32) as i128);
+    let mut out = Vec::with_capacity(steps * 8);
+    for i in 0..steps + 1000 {
+        let dx = LORENZ_SIGMA as i128 * (y - x);
+        let dy = (x * (LORENZ_RHO as i128 * q - z) >> 32) - y;
+        let dz = (x * y >> 32) - (LORENZ_BETA_NUM as i128 * z / LORENZ_BETA_DEN as i128);
+        x += (42949673i128 * dx) >> 32;
+        y += (42949673i128 * dy) >> 32;
+        z += (42949673i128 * dz) >> 32;
+        // This bound is a defensive invariant, not a chaotic-security argument.
+        assert!([x, y, z].iter().all(|v| v.abs() < 1024 * q));
+        if i >= 1000 {
+            out.extend_from_slice(&(x as i64).to_le_bytes());
+        }
     }
     out
+}
+
+fn payload_stream(keys: &Keys, iv: &[u8; 32], n: usize) -> Vec<u8> {
+    let trajectory = lorenz_stream(keys.schedule_seed, 4096);
+    let mut h = Hasher::new_keyed(&keys.enc_key);
+    h.update(b"lrz02-payload");
+    h.update(iv);
+    h.update(&trajectory);
+    let mut out = vec![0; n];
+    h.finalize_xof().fill(&mut out);
+    out
+}
+
+fn bounded(reader: &mut blake3::OutputReader, bound: usize) -> usize {
+    let bound = bound as u64;
+    let threshold = bound.wrapping_neg() % bound;
+    loop {
+        let mut b = [0; 8];
+        reader.fill(&mut b);
+        let x = u64::from_le_bytes(b);
+        if x >= threshold {
+            return (x % bound) as usize;
+        }
+    }
 }
 
 /// Derive a 64-bit Lorenz seed from BLAKE3 key material.
@@ -85,12 +115,8 @@ fn lorenz_seed(master_key: &[u8; 32], nonce: &[u8; 32]) -> u64 {
 // Keyed BLAKE3 helper (takes a slice, internally copies to [u8;32])
 // ---------------------------------------------------------------------------
 
-fn blake3_keyed(key: &[u8], context: &[u8], input: &[u8]) -> [u8; 32] {
-    // blake3::Hasher::new_keyed requires &[u8; 32]. We pad/truncate the key to 32 bytes.
-    let mut k = [0u8; 32];
-    let len = key.len().min(32);
-    k[..len].copy_from_slice(&key[..len]);
-    let mut h = Hasher::new_keyed(&k);
+fn blake3_keyed(key: &[u8; 32], context: &[u8], input: &[u8]) -> [u8; 32] {
+    let mut h = Hasher::new_keyed(key);
     h.update(context);
     h.update(input);
     let binding = h.finalize();
@@ -104,19 +130,12 @@ fn blake3_keyed(key: &[u8], context: &[u8], input: &[u8]) -> [u8; 32] {
 // ---------------------------------------------------------------------------
 // A simple 8-bit S-box built from key material via BLAKE3-driven Fisher-Yates.
 
-fn build_sbox(key: &[u8]) -> [u8; 256] {
-    let mut sbox: [u8; 256] = core::array::from_fn(|i| i as u8);
-    // Deterministic key stream from BLAKE3 (unkeyed, context-separated).
-    let mut stream: Vec<u8> = blake3_keyed(key, b"sbox-stream", &[]).to_vec();
-    let mut pos: usize = 0;
-
+fn build_sbox(key: &[u8; 32]) -> [u8; 256] {
+    let mut sbox = core::array::from_fn(|i| i as u8);
+    let seed = blake3_keyed(key, b"lrz02-sbox", &[]);
+    let mut reader = Hasher::new_keyed(&seed).finalize_xof();
     for i in (1..256).rev() {
-        if pos + 4 > stream.len() {
-            let ext = blake3_keyed(key, b"sbox-ext", &[pos as u8]);
-            stream.extend_from_slice(&ext);
-        }
-        let j = u32::from_le_bytes(stream[pos..pos + 4].try_into().unwrap()) as usize % (i + 1);
-        pos += 4;
+        let j = bounded(&mut reader, i + 1);
         sbox.swap(i, j);
     }
     sbox
@@ -134,10 +153,10 @@ fn sbox_sub(data: &mut [u8], sbox: &[u8; 256]) {
 
 /// Derived keys produced from the master 32-byte key and 32-byte nonce.
 pub struct Keys {
-    pub enc_key: [u8; 32],   // for permutation + diffusion
-    pub auth_key: [u8; 32],  // for authentication tag
-    pub sbox_key: [u8; 32],  // for S-box derivation
-    pub schedule_seed: u64,  // for Lorenz stream
+    pub enc_key: [u8; 32],  // for permutation + diffusion
+    pub auth_key: [u8; 32], // for authentication tag
+    pub sbox_key: [u8; 32], // for S-box derivation
+    pub schedule_seed: u64, // for Lorenz stream
 }
 
 pub fn derive_keys(master_key: &[u8; 32], nonce: &[u8; 32]) -> Keys {
@@ -159,18 +178,12 @@ pub fn derive_keys(master_key: &[u8; 32], nonce: &[u8; 32]) -> Keys {
 // ---------------------------------------------------------------------------
 
 /// Produce a final-position permutation array of length n using a keyed stream.
-fn fisher_yates_perm(n: usize, enc_key: &[u8]) -> Vec<usize> {
+fn fisher_yates_perm(n: usize, enc_key: &[u8; 32]) -> Vec<usize> {
     let mut perm: Vec<usize> = (0..n).collect();
-    let mut stream: Vec<u8> = blake3_keyed(enc_key, b"fisher-yates-stream", &[]).to_vec();
-    let mut pos: usize = 0;
-
+    let seed = blake3_keyed(enc_key, b"lrz02-permutation", &[]);
+    let mut reader = Hasher::new_keyed(&seed).finalize_xof();
     for i in (1..n).rev() {
-        if pos + 4 > stream.len() {
-            let ext = blake3_keyed(enc_key, b"fy-ext", &[(pos % 256) as u8]);
-            stream.extend_from_slice(&ext);
-        }
-        let j = u32::from_le_bytes(stream[pos..pos + 4].try_into().unwrap()) as usize % (i + 1);
-        pos += 4;
+        let j = bounded(&mut reader, i + 1);
         perm.swap(i, j);
     }
     perm
@@ -199,65 +212,43 @@ fn apply_perm_inverse(data: &mut [u8], perm: &[usize]) {
 // Diffusion (two-pass nonlinear feedback)
 // ---------------------------------------------------------------------------
 
+// Injective feedback in carry for a fixed input byte; still no security proof.
 fn diffuse_forward(data: &mut [u8], sbox: &[u8; 256]) {
-    let mut carry: u8 = 0;
+    let mut carry = 0;
     for b in data.iter_mut() {
-        let mixed = b.wrapping_add(carry);
-        let subbed = sbox[mixed as usize];
-        *b = subbed ^ carry;
+        *b = sbox[(*b ^ carry) as usize];
         carry = *b;
     }
 }
-
 fn diffuse_backward(data: &mut [u8], sbox: &[u8; 256]) {
-    let mut carry: u8 = 0;
+    let mut carry = 0;
     for b in data.iter_mut().rev() {
-        let mixed = b.wrapping_sub(carry);
-        let subbed = sbox[mixed as usize];
-        *b = subbed ^ carry;
+        *b = sbox[(*b ^ carry) as usize];
         carry = *b;
     }
 }
-
 fn undiffuse_backward(data: &mut [u8], sbox: &[u8; 256]) {
-    // Inverse of diffuse_backward, which processed n-1..0.
-    // Reverse order: process n-1 down to 0.
-    // diffuse_backward: out[i] = sbox[in[i] - out[i+1]] ^ out[i+1], out[n] = 0
-    // in[i] = sbox_inv[out[i] ^ out[i+1]] + out[i+1]
-    let mut carry: u8 = 0; // out[i+1], starts as out[n] = 0
-    for i in (0..data.len()).rev() {
-        let out_i = data[i];
-        let xored = out_i ^ carry;
-        let mut pre = 0u8;
-        for (j, &v) in sbox.iter().enumerate() {
-            if v == xored {
-                pre = j as u8;
-                break;
-            }
-        }
-        data[i] = pre.wrapping_add(carry);
-        carry = out_i;
+    let mut inv = [0; 256];
+    for (i, &v) in sbox.iter().enumerate() {
+        inv[v as usize] = i as u8;
+    }
+    let mut carry = 0;
+    for b in data.iter_mut().rev() {
+        let c = *b;
+        *b = inv[c as usize] ^ carry;
+        carry = c;
     }
 }
-
 fn undiffuse_forward(data: &mut [u8], sbox: &[u8; 256]) {
-    // Inverse of diffuse_forward, which processed 0..n-1.
-    // Forward order: process 0 to n-1.
-    // diffuse_forward: out[i] = sbox[in[i] + out[i-1]] ^ out[i-1], out[-1] = 0
-    // in[i] = sbox_inv[out[i] ^ out[i-1]] - out[i-1]
-    let mut carry: u8 = 0; // out[i-1], starts as out[-1] = 0
+    let mut inv = [0; 256];
+    for (i, &v) in sbox.iter().enumerate() {
+        inv[v as usize] = i as u8;
+    }
+    let mut carry = 0;
     for b in data.iter_mut() {
-        let out_i = *b;
-        let xored = out_i ^ carry;
-        let mut pre = 0u8;
-        for (j, &v) in sbox.iter().enumerate() {
-            if v == xored {
-                pre = j as u8;
-                break;
-            }
-        }
-        *b = pre.wrapping_sub(carry);
-        carry = out_i;
+        let c = *b;
+        *b = inv[c as usize] ^ carry;
+        carry = c;
     }
 }
 
@@ -319,7 +310,7 @@ pub fn compute_tag(auth_key: &[u8; 32], header: &[u8], ciphertext: &[u8]) -> [u8
 
 pub fn verify_tag(auth_key: &[u8; 32], header: &[u8], ciphertext: &[u8], tag: &[u8; 32]) -> bool {
     let expected = compute_tag(auth_key, header, ciphertext);
-    tag.iter().zip(expected.iter()).all(|(a, b)| a == b)
+    bool::from(tag.ct_eq(&expected))
 }
 
 // ---------------------------------------------------------------------------
@@ -345,16 +336,24 @@ impl CiphertextContainer {
             return None;
         }
         let header = Header::deserialize(&buf[0..HEADER_SIZE])?;
-        let total_payload = (header.width as usize)
-            * (header.height as usize)
-            * (header.channels as usize);
-        if buf.len() < HEADER_SIZE + total_payload + TAG_SIZE {
+        let total_payload = payload_len(header.width, header.height, header.channels)?;
+        if buf.len()
+            != HEADER_SIZE
+                .checked_add(total_payload)?
+                .checked_add(TAG_SIZE)?
+        {
             return None;
         }
         let payload = buf[HEADER_SIZE..HEADER_SIZE + total_payload].to_vec();
         let mut tag = [0u8; 32];
-        tag.copy_from_slice(&buf[HEADER_SIZE + total_payload..HEADER_SIZE + total_payload + TAG_SIZE]);
-        Some(CiphertextContainer { header, payload, tag })
+        tag.copy_from_slice(
+            &buf[HEADER_SIZE + total_payload..HEADER_SIZE + total_payload + TAG_SIZE],
+        );
+        Some(CiphertextContainer {
+            header,
+            payload,
+            tag,
+        })
     }
 }
 
@@ -365,8 +364,12 @@ pub fn encrypt(
     width: u32,
     height: u32,
     channels: u8,
-    rng: &mut (impl RngCore + ?Sized),
-) -> CiphertextContainer {
+    rng: &mut (impl RngCore + CryptoRng + ?Sized),
+) -> Result<CiphertextContainer, &'static str> {
+    let expected = payload_len(width, height, channels).ok_or("invalid or oversized geometry")?;
+    if expected != plaintext.len() {
+        return Err("payload length does not match geometry");
+    }
     // Random per-message nonce and IV.
     let mut nonce = [0u8; 32];
     let mut iv = [0u8; 32];
@@ -376,17 +379,7 @@ pub fn encrypt(
     let keys = derive_keys(master_key, &nonce);
     let sbox = build_sbox(&keys.sbox_key);
 
-    // Lorenz stream mixes into the IV to form the initial key stream.
-    // lorenz_stream yields 4 bytes per step; request enough steps to cover plaintext.len().
-    let lorenz_steps = plaintext.len().div_ceil(4);
-    let lorenz_bytes = lorenz_stream(keys.schedule_seed, lorenz_steps);
-    let lorenz_key_stream: Vec<u8> = lorenz_bytes
-        .iter()
-        .cycle()
-        .zip(iv.iter().cycle())
-        .take(plaintext.len())
-        .map(|(l, v)| *l ^ *v)
-        .collect();
+    let lorenz_key_stream = payload_stream(&keys, &iv, plaintext.len());
 
     let mut data = plaintext.to_vec();
 
@@ -421,24 +414,33 @@ pub fn encrypt(
 
     let tag = compute_tag(&keys.auth_key, &header.serialize(), &data);
 
-    CiphertextContainer {
+    Ok(CiphertextContainer {
         header,
         payload: data,
         tag,
-    }
+    })
 }
 
 /// Decrypt and verify. Returns None on authentication failure.
-pub fn decrypt(
-    master_key: &[u8; 32],
-    container: &CiphertextContainer,
-) -> Option<Vec<u8>> {
+pub fn decrypt(master_key: &[u8; 32], container: &CiphertextContainer) -> Option<Vec<u8>> {
+    if payload_len(
+        container.header.width,
+        container.header.height,
+        container.header.channels,
+    )? != container.payload.len()
+    {
+        return None;
+    }
     let keys = derive_keys(master_key, &container.header.nonce);
     let sbox = build_sbox(&keys.sbox_key);
 
     // Verify authentication tag BEFORE any transformation (fail-fast).
-    if !verify_tag(&keys.auth_key, &container.header.serialize(), &container.payload, &container.tag)
-    {
+    if !verify_tag(
+        &keys.auth_key,
+        &container.header.serialize(),
+        &container.payload,
+        &container.tag,
+    ) {
         return None;
     }
 
@@ -472,10 +474,9 @@ pub fn decrypt(
 
     // Inverse of Step 1.
     let n = data.len();
-    let lorenz_steps = n.div_ceil(4);
-    let lorenz_bytes = lorenz_stream(keys.schedule_seed, lorenz_steps);
-    for (i, (b, l)) in data.iter_mut().zip(lorenz_bytes.iter().cycle().take(n)).enumerate() {
-        *b ^= *l ^ iv[i % 32];
+    let lorenz_bytes = payload_stream(&keys, iv, n);
+    for (b, l) in data.iter_mut().zip(lorenz_bytes.iter().take(n)) {
+        *b ^= *l;
     }
 
     Some(data)
@@ -490,7 +491,7 @@ mod tests {
     fn round_trip_helper(plaintext: &[u8], width: u32, height: u32, channels: u8, seed: u64) {
         let key = [0x42u8; 32];
         let mut rng = StdRng::seed_from_u64(seed);
-        let container = encrypt(&key, plaintext, width, height, channels, &mut rng);
+        let container = encrypt(&key, plaintext, width, height, channels, &mut rng).unwrap();
         let decrypted = decrypt(&key, &container).expect("decryption failed");
         assert_eq!(decrypted, plaintext, "round-trip failed");
     }
@@ -511,7 +512,7 @@ mod tests {
 
     #[test]
     fn test_round_trip_rgba() {
-        let pt: Vec<u8> = (0..768).map(|i| (i % 256) as u8).collect(); // 16x16 RGBA
+        let pt: Vec<u8> = (0..1024).map(|i| (i % 256) as u8).collect(); // 16x16 RGBA
         round_trip_helper(&pt, 16, 16, 4, 99);
     }
 
@@ -533,7 +534,7 @@ mod tests {
         let key2 = [0x22u8; 32];
         let pt = [0x00u8; 256];
         let mut rng = StdRng::seed_from_u64(42);
-        let container = encrypt(&key1, &pt, 8, 8, 4, &mut rng);
+        let container = encrypt(&key1, &pt, 8, 8, 4, &mut rng).unwrap();
         let result = decrypt(&key2, &container);
         assert!(result.is_none(), "wrong key should be rejected");
     }
@@ -543,7 +544,7 @@ mod tests {
         let key = [0x33u8; 32];
         let pt = [0x00u8; 256];
         let mut rng = StdRng::seed_from_u64(42);
-        let mut container = encrypt(&key, &pt, 8, 8, 4, &mut rng);
+        let mut container = encrypt(&key, &pt, 8, 8, 4, &mut rng).unwrap();
         // Flip one payload byte
         container.payload[10] ^= 0xFF;
         let result = decrypt(&key, &container);
@@ -559,7 +560,10 @@ mod tests {
             assert!(!seen[v as usize], "S-box is not a permutation");
             seen[v as usize] = true;
         }
-        assert!(seen.iter().all(|&x| x), "S-box does not cover all byte values");
+        assert!(
+            seen.iter().all(|&x| x),
+            "S-box does not cover all byte values"
+        );
     }
 
     #[test]
@@ -573,7 +577,10 @@ mod tests {
             assert!(!seen[p], "permutation has duplicate");
             seen[p] = true;
         }
-        assert!(seen.iter().all(|&x| x), "permutation does not cover all indices");
+        assert!(
+            seen.iter().all(|&x| x),
+            "permutation does not cover all indices"
+        );
     }
 
     #[test]
@@ -595,5 +602,145 @@ mod tests {
         assert_eq!(s1, s2, "Lorenz stream must be deterministic");
         let s3 = lorenz_stream(43, 100);
         assert_ne!(s1, s3, "different seeds should produce different streams");
+    }
+}
+
+#[cfg(test)]
+mod review_tests {
+    use super::*;
+    use rand::{rngs::StdRng, SeedableRng};
+    #[test]
+    fn rejects_bad_geometry_and_trailing_bytes() {
+        let key = [7; 32];
+        let mut rng = StdRng::seed_from_u64(9);
+        assert!(encrypt(&key, &[0; 3], 1, 1, 4, &mut rng).is_err());
+        assert!(payload_len(u32::MAX, u32::MAX, 4).is_none());
+        assert!(payload_len(0, 1, 3).is_none());
+        assert!(payload_len(1, 1, 5).is_none());
+        let c = encrypt(&key, &[0; 4], 1, 1, 4, &mut rng).unwrap();
+        let mut b = c.serialize();
+        b.push(0);
+        assert!(CiphertextContainer::deserialize(&b).is_none());
+        b.pop();
+        b.pop();
+        assert!(CiphertextContainer::deserialize(&b).is_none());
+    }
+    #[test]
+    fn every_header_and_tag_bit_is_rejected() {
+        let key = [7; 32];
+        let mut rng = StdRng::seed_from_u64(9);
+        let c = encrypt(&key, &[0; 4], 1, 1, 4, &mut rng).unwrap();
+        let b = c.serialize();
+        for byte in (0..81).chain(85..117) {
+            for bit in 0..8 {
+                let mut changed = b.clone();
+                changed[byte] ^= 1 << bit;
+                if let Some(parsed) = CiphertextContainer::deserialize(&changed) {
+                    assert!(decrypt(&key, &parsed).is_none());
+                }
+            }
+        }
+    }
+    #[test]
+    fn all_shapes_and_modes_serialize() {
+        for (w, h) in [(1, 1), (1, 17), (19, 1), (17, 23), (64, 64)] {
+            for ch in 1..=4 {
+                let p = vec![127; (w * h * ch) as usize];
+                let mut rng = StdRng::seed_from_u64(1);
+                let c = encrypt(&[3; 32], &p, w, h, ch as u8, &mut rng).unwrap();
+                let parsed = CiphertextContainer::deserialize(&c.serialize()).unwrap();
+                assert_eq!(decrypt(&[3; 32], &parsed).unwrap(), p);
+            }
+        }
+    }
+    #[test]
+    fn version_and_stream_vectors() {
+        let mut rng = StdRng::seed_from_u64(9);
+        let c = encrypt(&[7; 32], &[0; 4], 1, 1, 4, &mut rng).unwrap();
+        assert_eq!(&c.serialize()[..8], b"LRZIMG02");
+        assert_eq!(
+            blake3::hash(&c.serialize()).to_hex().as_str(),
+            "9fea7c94f8a354d120d798381d1f0f79c16b9075ea8b004d7b4f8132556cefd6"
+        );
+        let mut old = c.serialize();
+        old[..8].copy_from_slice(b"LRZIMG01");
+        assert!(CiphertextContainer::deserialize(&old).is_none());
+    }
+    #[test]
+    #[ignore]
+    fn evaluation() {
+        let key = [42; 32];
+
+        let p: Vec<u8> = (0..12288).map(|i| (i % 251) as u8).collect();
+        println!("REVIEW_JSON_BEGIN");
+        print!("[\n");
+        for mode in 0..5 {
+            // Modes: full; Lorenz replaced by zero trajectory; no diffusion; no permutation.
+            for trial in 0..100 {
+                let mut nonce = [0; 32];
+                let mut paired_rng = StdRng::seed_from_u64(20261118 + trial as u64);
+                paired_rng.fill_bytes(&mut nonce);
+                let iv = [5; 32];
+                let keys = derive_keys(&key, &nonce);
+                let sbox = build_sbox(&keys.sbox_key);
+                let perm = fisher_yates_perm(p.len(), &keys.enc_key);
+                let stream = if mode == 1 {
+                    let mut h = Hasher::new_keyed(&keys.enc_key);
+                    h.update(b"lrz02-payload");
+                    h.update(&iv);
+                    h.update(&vec![0; 4096 * 8]);
+                    let mut s = vec![0; p.len()];
+                    h.finalize_xof().fill(&mut s);
+                    s
+                } else {
+                    payload_stream(&keys, &iv, p.len())
+                };
+                let transform = |input: &[u8]| {
+                    let mut d: Vec<u8> = input.iter().zip(&stream).map(|(a, b)| a ^ b).collect();
+                    sbox_sub(&mut d, &sbox);
+                    if mode != 3 {
+                        apply_perm(&mut d, &perm);
+                    }
+                    if mode == 4 {
+                        let mut carry = 0;
+                        for b in d.iter_mut() {
+                            *b = sbox[b.wrapping_add(carry) as usize] ^ carry;
+                            carry = *b;
+                        }
+                        carry = 0;
+                        for b in d.iter_mut().rev() {
+                            *b = sbox[b.wrapping_sub(carry) as usize] ^ carry;
+                            carry = *b;
+                        }
+                    } else if mode != 2 {
+                        diffuse_forward(&mut d, &sbox);
+                        diffuse_backward(&mut d, &sbox);
+                    }
+                    d
+                };
+                let mut changed = p.clone();
+                changed[(trial * 127) % p.len()] ^= 1;
+                let a = transform(&p);
+                let b = transform(&changed);
+                let n = a.iter().zip(&b).filter(|(x, y)| x != y).count() as f64 * 100.0
+                    / p.len() as f64;
+                let u = a
+                    .iter()
+                    .zip(&b)
+                    .map(|(x, y)| (*x as i32 - *y as i32).unsigned_abs() as u64)
+                    .sum::<u64>() as f64
+                    * 100.0
+                    / (255 * p.len()) as f64;
+                println!(
+                    "{{\"mode\":{},\"trial\":{},\"npcr\":{},\"uaci\":{}}}{}",
+                    mode,
+                    trial,
+                    n,
+                    u,
+                    if mode == 4 && trial == 99 { "" } else { "," }
+                );
+            }
+        }
+        println!("]\nREVIEW_JSON_END");
     }
 }
