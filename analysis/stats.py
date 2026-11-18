@@ -20,6 +20,7 @@ from PIL import Image
 
 
 def shannon_entropy(data: np.ndarray) -> float:
+    if data.size == 0: raise ValueError("nonempty byte array required")
     counts = np.bincount(data.ravel(), minlength=256)
     probs = counts[counts > 0] / len(data.ravel())
     return float(-np.sum(probs * np.log2(probs)))
@@ -27,6 +28,7 @@ def shannon_entropy(data: np.ndarray) -> float:
 
 def adjacent_correlation(channel: np.ndarray, direction: str = "horizontal") -> float:
     h, w = channel.shape
+    if h == 0 or w == 0: return float("nan")
     channel = channel.astype(np.float64)
     if direction == "horizontal":
         x = channel[:, :-1].ravel()
@@ -39,12 +41,14 @@ def adjacent_correlation(channel: np.ndarray, direction: str = "horizontal") -> 
         y = channel[1:, 1:].ravel()
     else:
         raise ValueError(direction)
-    if x.std() == 0 or y.std() == 0:
-        return 0.0
+    if len(x) < 2 or x.std() == 0 or y.std() == 0:
+        return float("nan")
     return float(np.corrcoef(x, y)[0, 1])
 
 
 def npcr_uaci(a: np.ndarray, b: np.ndarray) -> Tuple[float, float]:
+    if a.shape != b.shape or a.size == 0:
+        raise ValueError("equal nonempty shapes required")
     a = a.astype(np.int16).ravel()
     b = b.astype(np.int16).ravel()
     n = len(a)

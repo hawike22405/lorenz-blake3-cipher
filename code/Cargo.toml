@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 blake3 = "1.5.2"
 rand = "0.8.5"
+subtle = "2.6"
 clap = { version = "4.4", features = ["derive"] }
 
 [[bin]]
