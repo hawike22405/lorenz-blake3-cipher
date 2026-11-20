@@ -1,15 +1,24 @@
-# Lorenz BLAKE3 cipher research and implementation audit
+# Lorenz–BLAKE3 Image Cipher
 
-This repository contains an experimental image-byte cipher, a fixed-schedule model attack, and a **separate AES-256-GCM file tool** for practical cryptographic protection. The experimental cipher has no confidentiality or integrity proof. Its statistics do not establish security or superiority over Podder and Deb.
+An experimental image-byte cipher built from a fixed-point Lorenz map and keyed BLAKE3, with a reproducible evaluation toolkit and a separate AES-256-GCM file tool.
 
-## Versions and compatibility
+> **Research prototype. Not for real data.**
+> There is no security proof, no third-party cryptanalysis, and the statistics reported here do not establish confidentiality or integrity. For practical protection use `scripts/aead_file.py` (AES-256-GCM) or an audited encryption product.
 
-- Original repository commit: `69465bcdd7501913953c31a36816d7964440585f` (`LRZIMG01`). Its CLI seeded `StdRng` with 42 on every invocation. Different invocations repeated nonce/IV and ciphertext. It accepted trailing bytes and inconsistent geometry.
-- Reviewed implementation: `LRZIMG02`, intentionally incompatible. It uses `OsRng`, checked geometry (1–4 channels, positive dimensions, at most 64 MiB), strict lengths, `subtle` tag comparison, continuous BLAKE3 XOF/rejection sampling, rescaled Q32.32 Euler arithmetic and corrected feedback. It permutes **bytes**, not complete pixels. There is no RGB mixing or plaintext-derived IV.
-- The older Float64 RK4/plaintext-derived-IV experiments in the manuscript drafts are **another implementation**, not measurements of this repository. Do not attach their speed, memory or differential figures to either repository version.
-- `FIXED_PAPER.md`, `FIXED_PAPER.pdf`, and `docs/commands.pdf` are historical drafts. The evaluator report, six-page IEEEtran manuscript and editable LaTeX source are supplied separately in the research package. Detailed evidence is not published in this repository. Running the evaluation creates local `review/` results.
+## Contents
 
-## Quick start: one command (Linux/macOS)
+- [Quick start](#quick-start)
+- [Encrypt your own image](#encrypt-your-own-image)
+- [Evaluate the cipher](#evaluate-the-cipher)
+- [NIST SP 800-22 randomness tests](#nist-sp-800-22-randomness-tests)
+- [AES-256-GCM file tool](#aes-256-gcm-file-tool)
+- [Findings and limits](#findings-and-limits)
+- [Versions and compatibility](#versions-and-compatibility)
+- [Repository layout](#repository-layout)
+
+## Quick start
+
+Linux and macOS. Requires `git`, `python3` with `venv`, and a C compiler (`build-essential` on Debian/Ubuntu, `xcode-select --install` on macOS). Rust is installed for you if missing. The first build needs network access.
 
 ```bash
 git clone https://github.com/hawike22405/lorenz-blake3-cipher.git
@@ -17,150 +26,132 @@ cd lorenz-blake3-cipher
 bash scripts/install_and_test.sh
 ```
 
-The script can also be run on its own from any directory; it clones the repository itself if it is not inside a checkout. It:
-
-1. installs a Rust toolchain through rustup if `cargo` is missing,
-2. builds the `lrz` binary (`--release --locked`),
-3. runs the Rust tests in debug and release mode,
-4. creates `.venv` and installs `requirements.txt`,
-5. runs the demo round trip, `scripts/check_cli.py`, `scripts/check_aead.py` and the toy attack script,
-6. prints system metrics with `fastfetch` (installs it non-interactively if possible, otherwise shows a basic CPU/memory/disk summary), then **asks for the path to an image** and round-trips it through `lrz`,
-7. prints a PASS/FAIL summary and exits nonzero if any check failed.
-
-Requirements: `git`, `python3` with `venv` support, `curl` (only if Rust must be installed) and a C compiler (`build-essential` on Debian/Ubuntu, `xcode-select --install` on macOS). The first build downloads dependencies, so it needs network access.
+The script builds the `lrz` binary, runs the Rust tests (debug and release), creates `.venv`, runs the demo round trip and all check scripts, then shows system info with `fastfetch` and asks for an image to test. It prints a PASS/FAIL summary and exits nonzero on any failure.
 
 | Option | Effect |
 | --- | --- |
-| `--image PATH` | Test this image without prompting (also settable as `IMAGE_PATH=...`) |
+| `--image PATH` | Test this image without prompting |
 | `--no-image` | Skip the image step |
-| `--trials N` | Differential trials for NPCR/UACI in the image test (default 20; also `TRIALS=N`) |
-| `--no-metrics` | Skip the research-metrics table in the image test |
-| `--no-fetch` | Skip the system metrics (fastfetch) display |
-| `--keep-going` | Continue after a failing check instead of stopping |
+| `--trials N` | Differential trials for the image metrics (default 20) |
+| `--no-metrics` | Skip the metrics table |
+| `--no-fetch` | Skip the fastfetch system info |
+| `--keep-going` | Continue after a failing check |
 
-### Testing with your own image
-
-At the end of the script you are prompted:
-
-```
-Enter the path to an image to test (png/jpg/bmp/...), or press Enter to skip:
-```
-
-Quoted, drag-and-dropped, `~` and relative paths are accepted. Because `lrz` only handles raw bytes, the script converts the image with Pillow (L, LA, RGB and RGBA are kept; other modes become RGB or RGBA), then encrypts, verifies the tag, decrypts and requires the recovered bytes to equal the original. Raw size is limited to 64 MiB. Each run writes a new directory `review/image_test/<timestamp>/` containing:
-
-- `original.png`, `recovered.png`: should look identical,
-- `encrypted_preview.png`: the ciphertext payload drawn as an image,
-- `metrics.json`, `metrics.csv`, `metrics.md`: the research metrics below,
-- `image.lrz`, `key.bin`, `input.raw`, `recovered.raw`: for manual use with `lrz`.
-
-`key.bin` is a throwaway test key; the folder is created with owner-only permissions. If no terminal is available the prompt is skipped; pass `--image` instead.
-
-### Research metrics for your image
-
-After the round trip, `scripts/image_metrics.py` prints (and saves) a table for your image: per-channel Shannon entropy and horizontal/vertical/diagonal adjacent-pixel correlation of plaintext and ciphertext, a histogram chi-square uniformity check, NPCR/UACI over `--trials` one-byte plaintext changes (mean, sd, 95% CI, with the random-pair expectations 99.6094% / 33.4635%), recovery checks (exact match, MSE, PSNR, one-bit-wrong-key rejection) and timing. It can also be run directly:
+Prefer manual steps? Use the runner:
 
 ```bash
-python scripts/image_metrics.py --binary code/target/release/lrz --raw input.raw --width W --height H --channels C --out-dir some_existing_dir --trials 20
+bash scripts/run.sh setup       # venv + Python deps + release build
+bash scripts/run.sh test        # Rust tests
+bash scripts/run.sh demo        # synthetic encrypt → verify → decrypt round trip
+bash scripts/run.sh evaluate    # 500-trial ablation, writes review/
 ```
 
-**Interpretation caveat:** the CLI draws a fresh random nonce for every encryption, so any two ciphertexts differ even for identical plaintexts. The NPCR/UACI values from this step therefore mainly reflect the nonce and land near the random-pair expectation; they are not evidence of plaintext sensitivity or security. The fixed-schedule differential experiment is `bash scripts/run.sh evaluate`.
+Windows: the Rust tests run in CI on Windows, but the scripts above are only exercised on Linux. Build with `cargo build --release --locked --manifest-path code/Cargo.toml`.
 
-## Manual install and run (Linux/macOS)
+## Encrypt your own image
 
-Install a Rust toolchain through [rustup](https://rustup.rs). The reviewed build used Rust 1.100.0 on Linux x86-64; CI also passed debug and release tests on Linux, Windows and macOS; the Bash demo and file wrappers were exercised locally on Linux. Python 3 is needed for scripts. Do not regenerate Cargo.lock during an ordinary build.
+`lrz` works on **raw interleaved bytes**, not PNG or JPEG. The helper converts for you:
 
 ```bash
-git clone https://github.com/hawike22405/lorenz-blake3-cipher.git
-cd lorenz-blake3-cipher
-bash scripts/run.sh setup
 . .venv/bin/activate
-bash scripts/run.sh test
-bash scripts/run.sh demo
-bash scripts/run.sh evaluate
-```
-
-`setup` creates `.venv`, installs Python requirements and builds the locked release crate. It requires Rust, Python 3 with venv support, and first-run network access. It does not install a compiler/toolchain for you. `build` builds Rust only.
-
-`demo` generates synthetic 64×64 RGB raw data and a test key in a new temporary directory, encrypts, verifies, decrypts and compares bytes. `evaluate` writes all 500 ablation trial records and summaries to `review/`. Dependency downloads require network access on the first build.
-
-If you skipped `setup`, install the Python analysis/image/AES dependencies separately:
-For Python image analysis and the AES-GCM wrapper, use a virtual environment (`install_and_test.sh` does this for you):
-
-```bash
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install -r requirements.txt
-```
-
-## Try your own image
-
-After `setup` and activating `.venv`:
-
-```bash
 python scripts/image_demo.py --input photo.png --output-dir image-demo
 ```
 
-Use a **new** output directory on each run. This creates a demo key, `cipher.lrz` and `recovered.png`, and asserts exact decoded-byte recovery. Keep the demo directory private; it contains a key and recovered plaintext. The script preserves L, LA, RGB and RGBA modes; for other modes select an explicit conversion, for example `--mode RGB`. It handles only the first frame of animated/multipage images. Source metadata and compressed file bytes are not preserved. Use the AES-GCM file wrapper below when complete-file recovery is required.
+Use a new output directory each run. It creates a throwaway key, `cipher.lrz` and `recovered.png`, and checks that the decoded pixels match exactly. Modes L, LA, RGB and RGBA are preserved; for other modes pass `--mode RGB`. Only the first frame is used and file metadata is not preserved. Keep the output folder private, since it contains the key and the recovered image.
 
-On Windows, use PowerShell with Rust and Python installed:
-
-```powershell
-git clone https://github.com/hawike22405/lorenz-blake3-cipher.git
-cd lorenz-blake3-cipher
-py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-cargo build --release --locked --manifest-path code/Cargo.toml
-cargo test --locked --manifest-path code/Cargo.toml
-.\.venv\Scripts\python.exe scripts/image_demo.py --input photo.png --output-dir image-demo
-```
-
-The Rust tests have CI coverage on Windows; these complete PowerShell/demo commands have only been exercised locally on Linux through the corresponding Python/Bash paths.
-
-## Raw image workflow
-
-`lrz` reads **raw interleaved bytes**, not PNG/JPEG. Preserve width, height and channel count when converting an image. L, LA, RGB and RGBA use 1, 2, 3 and 4 channels. Decoded pixel equality does not mean identical PNG metadata/compression.
+To use the CLI directly, create a key and pass the image geometry:
 
 ```bash
-# Generate an independent random key with owner-only permissions on POSIX.
 python3 -c 'import os; f=os.open("key.bin",os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600); os.write(f,os.urandom(32)); os.close(f)'
 ./code/target/release/lrz encrypt --key key.bin --input image.raw --output image.lrz --width 256 --height 256 --channels 3
-./code/target/release/lrz verify --key key.bin --input image.lrz
+./code/target/release/lrz verify  --key key.bin --input image.lrz
 ./code/target/release/lrz decrypt --key key.bin --input image.lrz --output recovered.raw
 ```
 
-There is no CLI seed option. Output files are never overwritten. Errors return a nonzero status; invalid authentication never writes plaintext. Protect keys separately from ciphertext. No replay database or nonce-reuse detection is provided. The limit caps payload bytes, **not total process memory**; byte permutations and copies use considerably more memory.
+Channels are 1 (L), 2 (LA), 3 (RGB) or 4 (RGBA). Output files are never overwritten, and a failed authentication writes nothing. Keep keys separate from ciphertext. There is no replay or nonce-reuse detection. The 64 MiB limit caps payload bytes, not total memory, which is several times higher.
 
-## Separate reviewed primitive for practical file protection
+## Evaluate the cipher
+
+| Goal | Command |
+| --- | --- |
+| Metrics for one image (entropy, correlation, chi-square, NPCR/UACI, recovery, timing) | `python scripts/image_metrics.py --binary code/target/release/lrz --raw input.raw --width W --height H --channels C --out-dir EXISTING_DIR --trials 20` |
+| Fixed-schedule ablation (the meaningful differential test) | `bash scripts/run.sh evaluate` |
+| CLI regression checks and timings | `mkdir -p review && python scripts/check_cli.py --binary code/target/release/lrz --output review/cli.json` |
+| Toy equivalent-key attack | `python attack/equivalent_key_attack.py --n 65536 --seed 42` |
+| Image statistics from PNGs | `python analysis/stats.py --single cipher.png --mode RGB` |
+
+Results are written to the git-ignored `review/` folder.
+
+**Read NPCR/UACI carefully.** The CLI draws a fresh random nonce for every encryption, so any two ciphertexts differ. NPCR/UACI from `image_metrics.py` therefore mostly reflect the nonce and land near the random-pair values (99.609 % and 33.464 %). They are not evidence of plaintext sensitivity. Use `bash scripts/run.sh evaluate` for that.
+
+## NIST SP 800-22 randomness tests
+
+1. **Make the bit file** from one or more `.lrz` files. It strips headers and tags and trims to whole 1,000,000-bit streams:
+
+   ```bash
+   python3 scripts/make_nist_bits.py image.lrz            # writes cipher_bits.bin
+   ```
+
+   It prints the number of bitstreams. A 3072×1728 RGB image gives 127. For a stricter test, encrypt an all-zero plaintext under many fresh keys and pass all the containers at once.
+
+2. **Download** the NIST Statistical Test Suite from the [NIST Random Bit Generation page](https://csrc.nist.gov/projects/random-bit-generation/documentation-and-software), unpack it, and `cd` to the folder containing the `Makefile`.
+
+3. **Build and run:**
+
+   ```bash
+   make
+   ./assess 1000000
+   ```
+
+   | Prompt | Answer |
+   | --- | --- |
+   | Generator | `0` (input file), then the absolute path to `cipher_bits.bin` |
+   | Apply all tests | `1` |
+   | Parameter adjustments | `0` |
+   | Number of bitstreams | the count printed in step 1 |
+   | Input format | `1` (binary) |
+
+4. **Read the report** at `experiments/AlgorithmTesting/finalAnalysisReport.txt`. Each test should pass in roughly 98–100 % of streams, and the uniformity column should be at least 0.0001. With about 188 sub-tests, one or two marginal failures are expected by chance; re-run on fresh data before drawing conclusions. A pass shows the output looks random, not that the cipher is secure.
+
+## AES-256-GCM file tool
+
+A separate, small wrapper around the `cryptography` library for protecting whole files:
 
 ```bash
-python scripts/aead_file.py keygen --key aes.key
+python scripts/aead_file.py keygen  --key aes.key
 python scripts/aead_file.py encrypt --key aes.key --input photo.png --output photo.aes
 python scripts/aead_file.py decrypt --key aes.key --input photo.aes --output recovered.png
 ```
 
-This tool uses the `cryptography` implementation of AES-256-GCM, a fresh 96-bit random nonce and authenticated header, under its own `AESFILE1` format (36-byte overhead). It preserves the complete input file, does not use Lorenz, caps files at 64 MiB, and refuses overwrites. Reads are bounded and new output/key files request mode 0600 on POSIX; Windows permissions follow its OS access-control settings. It is a small wrapper, not an audited storage product: it has no password KDF, replay tracking, streaming, crash recovery or key-management system. It does not convert the research cipher into standardized AEAD.
+It uses a fresh 96-bit random nonce and an authenticated header (`AESFILE1`, 36 bytes of overhead), preserves the complete file, caps files at 64 MiB and refuses to overwrite. It is not an audited storage product: no password KDF, replay tracking, streaming, crash recovery or key management. Run `python scripts/check_aead.py` to exercise it.
 
-## What was tested
+## Findings and limits
 
-The accompanying evaluator report contains the full review. Reproduce JSON records and test outputs with the commands below. The original 11 tests passed, despite the CLI problems. The reviewed implementation has 15 passing debug and release tests and a separately invoked 500-record ablation experiment. CLI regression checks verify changed nonces, exact round trips, extension rejection and geometry validation.
+- **Correctness:** round trips are exact, wrong keys and tampered containers are rejected, and the frozen test vector passes the Linux/Windows/macOS debug and release [CI matrix](https://github.com/hawike22405/lorenz-blake3-cipher/actions/runs/44256257063). That validates the tested vector and configurations only.
+- **Ablation (100 matched trials):** the old feedback gave about 4.53 % NPCR. The corrected feedback gives about 99.81 %, and about 99.80 % with Lorenz removed. So the Lorenz map adds no measurable diffusion, and the avalanche comes from the feedback passes. Values above the random-pair expectation of 99.609 % are a structural property of the feedback, not evidence of improved confidentiality.
+- **Toy attack:** the three-query script breaks a *toy* fixed permutation-plus-XOR model with 65,536 byte positions. It is not an implementation of, or a demonstrated break of, the Podder–Deb paper.
+- **Not claimed:** NIST SP 800-22 results, CPA resistance, 256-bit security, a construction-level forgery bound, cross-platform interoperability beyond CI, a speed advantage over standard ciphers, or publication acceptance. A 256-bit key and a 32-byte tag do not establish any of these.
+- **Throughput:** about 5 MB/s end to end for a 3072×1728 RGB image on a Ryzen 5 7235HS, including process start and file I/O.
 
-The matched 100-trial fixed-schedule ablation shows old feedback around 4.53% NPCR, corrected full feedback around 99.81%, and corrected feedback without Lorenz around 99.80%. The latter two are **above the independent random-pair expectation** of 99.609375%; they do not pass a claimed randomness/security certification. This experiment demonstrates the old feedback defect and no demonstrated advantage from Lorenz. It does not prove improved confidentiality.
+## Versions and compatibility
 
-The three-query script recovers a permutation and mask for a **toy fixed permutation-plus-XOR model** with 65,536 byte positions. It is not a faithful implementation or an experimentally demonstrated break of the Podder–Deb paper.
+- **`LRZIMG02` (this version):** `OsRng` nonce and IV, checked geometry (1–4 channels, positive dimensions, at most 64 MiB), strict lengths, constant-time tag comparison, BLAKE3 XOF with rejection sampling, rescaled Q32.32 Euler arithmetic and corrected feedback. It permutes bytes, not whole pixels. Container overhead is 113 bytes. See [ARCHITECTURE.md](ARCHITECTURE.md) for the exact specification.
+- **`LRZIMG01` (commit `69465bc`):** intentionally incompatible. Its CLI seeded `StdRng` with 42 on every run, so nonce, IV and ciphertext repeated, and it accepted trailing bytes and inconsistent geometry.
+- **Older drafts:** `FIXED_PAPER.md` and `FIXED_PAPER.pdf` describe an earlier Float64 RK4 implementation. Do not attach their speed, memory or differential figures to this repository.
 
-## Reproduce checks
+## Repository layout
 
-```bash
-python3 scripts/check_aead.py
-python3 attack/equivalent_key_attack.py --n 65536 --seed 42
-python3 scripts/check_cli.py --binary code/target/release/lrz --output review/revised_cli.json
-python analysis/stats.py --single cipher.png --mode RGB
-python analysis/stats.py --cipher c1.png c2.png --channel 0 --mode RGB
-```
+| Path | Contents |
+| --- | --- |
+| `code/` | Rust crate (`lrz` binary, cipher library, tests) |
+| `scripts/` | Installer, runner, image demo, metrics, CLI checks, AES-GCM tool, NIST helper |
+| `analysis/` | Entropy, correlation, NPCR/UACI helpers |
+| `attack/` | Toy equivalent-key attack |
+| `ARCHITECTURE.md` | Normative `LRZIMG02` specification |
+| `CONTRIBUTING.md` | Contribution guide |
 
-The frozen container digest passed the [Linux/Windows/macOS debug and release CI matrix](https://github.com/hawike22405/lorenz-blake3-cipher/actions/runs/44256257063); that validates the tested vector and configurations only.
+Rust 1.100.0 on Linux x86-64 was used for the reviewed build. Do not regenerate `Cargo.lock` during an ordinary build.
 
-No NIST SP 800-22 results, general CPA resistance, universal cross-platform interoperability, 256-bit security, construction-level forgery bound, matched reference speedup or publication acceptance is claimed. Nominal key length and a 32-byte tag do not establish those properties.
+## License
 
-MIT License; see LICENSE. Add confirmed author metadata and dataset permissions before submitting the manuscript.
-
+MIT, see [LICENSE](LICENSE). Add confirmed author metadata and dataset permissions before submitting a manuscript.
