@@ -19,6 +19,7 @@ bash scripts/install_and_test.sh
 
 The script can also be run on its own from any directory; it clones the repository itself if it is not inside a checkout. It:
 
+0. prints system metrics with `fastfetch` first (installs it non-interactively if possible, otherwise shows a basic CPU/memory/disk summary),
 1. installs a Rust toolchain through rustup if `cargo` is missing,
 2. builds the `lrz` binary (`--release --locked`),
 3. runs the Rust tests in debug and release mode,
@@ -33,6 +34,9 @@ Requirements: `git`, `python3` with `venv` support, `curl` (only if Rust must be
 | --- | --- |
 | `--image PATH` | Test this image without prompting (also settable as `IMAGE_PATH=...`) |
 | `--no-image` | Skip the image step |
+| `--trials N` | Differential trials for NPCR/UACI in the image test (default 20; also `TRIALS=N`) |
+| `--no-metrics` | Skip the research-metrics table in the image test |
+| `--no-fetch` | Skip the system metrics (fastfetch) display |
 | `--keep-going` | Continue after a failing check instead of stopping |
 
 ### Testing with your own image
@@ -47,9 +51,20 @@ Quoted, drag-and-dropped, `~` and relative paths are accepted. Because `lrz` onl
 
 - `original.png`, `recovered.png`: should look identical,
 - `encrypted_preview.png`: the ciphertext payload drawn as an image,
+- `metrics.json`, `metrics.csv`, `metrics.md`: the research metrics below,
 - `image.lrz`, `key.bin`, `input.raw`, `recovered.raw`: for manual use with `lrz`.
 
 `key.bin` is a throwaway test key; the folder is created with owner-only permissions. If no terminal is available the prompt is skipped; pass `--image` instead.
+
+### Research metrics for your image
+
+After the round trip, `scripts/image_metrics.py` prints (and saves) a table for your image: per-channel Shannon entropy and horizontal/vertical/diagonal adjacent-pixel correlation of plaintext and ciphertext, a histogram chi-square uniformity check, NPCR/UACI over `--trials` one-byte plaintext changes (mean, sd, 95% CI, with the random-pair expectations 99.6094% / 33.4635%), recovery checks (exact match, MSE, PSNR, one-bit-wrong-key rejection) and timing. It can also be run directly:
+
+```bash
+python scripts/image_metrics.py --binary code/target/release/lrz --raw input.raw --width W --height H --channels C --out-dir some_existing_dir --trials 20
+```
+
+**Interpretation caveat:** the CLI draws a fresh random nonce for every encryption, so any two ciphertexts differ even for identical plaintexts. The NPCR/UACI values from this step therefore mainly reflect the nonce and land near the random-pair expectation; they are not evidence of plaintext sensitivity or security. The fixed-schedule differential experiment is `bash scripts/run.sh evaluate`.
 
 ## Manual install and run (Linux/macOS)
 
