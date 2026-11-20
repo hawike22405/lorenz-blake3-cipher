@@ -2,11 +2,12 @@
 """
 Statistical analysis for image-cipher ciphertexts.
 
-Computes Shannon entropy, Pearson adjacent-pixel correlation, NPCR, and UACI
-with per-trial statistics and 95% confidence intervals.
+Computes Shannon entropy, Pearson adjacent-pixel correlation, NPCR, and UACI.
+The CLI describes individual images/pairs; it does not infer security or a
+confidence interval from a single comparison.
 
 Usage:
-    python3 stats.py --cipher c1.png --cipher c2.png   # NPCR/UACI between two ciphertexts
+    python3 stats.py --cipher c1.png c2.png   # NPCR/UACI between two ciphertexts
     python3 stats.py --single c.png                     # entropy + correlation of one file
 """
 
@@ -58,7 +59,16 @@ def npcr_uaci(a: np.ndarray, b: np.ndarray) -> Tuple[float, float]:
 
 
 def ci_mean_sd(values, confidence: float = 0.95):
+    """Approximate normal interval, assuming independent replicate statistics.
+
+    Callers must justify that model; this is not a random-pair critical value
+    or an appropriate interval for dependent overlapping neighbour pairs.
+    """
+    if confidence not in (0.95, 0.99):
+        raise ValueError('supported confidence levels are 0.95 and 0.99')
     n = len(values)
+    if n < 2 or not np.all(np.isfinite(values)):
+        raise ValueError('at least two finite independent replicates required')
     mean = float(np.mean(values))
     sd = float(np.std(values, ddof=1)) if n > 1 else 0.0
     # Approximate 95% CI (normal approximation; use t-distribution for small n).

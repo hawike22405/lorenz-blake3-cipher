@@ -30,7 +30,7 @@ y += (42949673*dy) >> 32
 z += (42949673*dz) >> 32
 ```
 
-Signed shifts are arithmetic. A defensive bound requires absolute states below 1024q. Discard 1000 steps; retain 4096 x states, each serialized i64-LE (32768 bytes). The nominal seed is only 64 bits; no 256-bit Lorenz-strength claim is made. Cross-platform test-vector agreement is still required.
+Signed shifts are arithmetic. A defensive bound requires absolute states below 1024q. Discard 1000 steps; retain 4096 x states, each serialized i64-LE (32768 bytes). The nominal seed is only 64 bits; no 256-bit Lorenz-strength claim is made. The frozen vector passed debug/release CI on Linux, Windows and macOS; broader interoperability remains unverified.
 
 ## Streams and permutation
 

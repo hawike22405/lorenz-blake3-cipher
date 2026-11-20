@@ -4,6 +4,12 @@ set -euo pipefail
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 command -v cargo >/dev/null || { echo 'Install Rust using https://rustup.rs then restart your shell.' >&2; exit 1; }
 case "${1:-help}" in
+ setup)
+  command -v python3 >/dev/null || { echo 'Install Python 3 with venv support.' >&2; exit 1; }
+  python3 -m venv "$root/.venv"
+  "$root/.venv/bin/python" -m pip install -r "$root/requirements.txt"
+  cargo build --release --locked --manifest-path "$root/code/Cargo.toml"
+  echo "Ready. Activate Python with: source \"$root/.venv/bin/activate\"" ;;
  build) cargo build --release --locked --manifest-path "$root/code/Cargo.toml" ;;
  test) cargo test --locked --manifest-path "$root/code/Cargo.toml" ;;
  evaluate) mkdir -p "$root/review"; cargo test --release --locked --manifest-path "$root/code/Cargo.toml" -- --ignored --nocapture > "$root/review/ablation.log"; python3 "$root/scripts/summarize.py" ;;
@@ -21,5 +27,6 @@ PY
   "$root/code/target/release/lrz" decrypt --key "$demo_dir/key.bin" --input "$demo_dir/cipher.lrz" --output "$demo_dir/recovered.raw"
   cmp "$demo_dir/input.raw" "$demo_dir/recovered.raw"
   echo "Exact round trip; files in $demo_dir (contains a test key)." ;;
- *) echo "Usage: bash scripts/run.sh {build|test|evaluate|demo}" ;;
+ help) echo "Usage: bash scripts/run.sh {setup|build|test|evaluate|demo}" ;;
+ *) echo "Usage: bash scripts/run.sh {setup|build|test|evaluate|demo}" >&2; exit 2 ;;
 esac

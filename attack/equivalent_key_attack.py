@@ -14,7 +14,6 @@ Usage:
 """
 
 import argparse
-import math
 import random
 import sys
 from typing import List, Tuple
@@ -46,7 +45,9 @@ def recover_equivalent_key(cipher: FixedScheduleCipher) -> Tuple[List[int], byte
     where d = ceil(log_256 n). For n=65536, d=2 => 3 queries total.
     """
     n = cipher.n
-    d = max(1, math.ceil(math.log(n, 256)))
+    if n < 1:
+        raise ValueError('a positive number of byte positions is required')
+    d = ((n - 1).bit_length() + 7) // 8
 
     # Query 1: all-zero plaintext -> recovers R directly.
     zero = bytes(n)
@@ -70,13 +71,17 @@ def recover_equivalent_key(cipher: FixedScheduleCipher) -> Tuple[List[int], byte
             idx |= digit << (8 * t)
         recovered_pi[out_pos] = idx
 
-    # Convert to forward permutation: pi[in_pos] = out_pos.
-    pi_forward = [0] * n
-    for out_pos, in_pos in enumerate(recovered_pi):
-        pi_forward[in_pos] = out_pos
-
     # recovered_pi is out->in, matching cipher.pi. Return it directly.
     return recovered_pi, R, 1 + d
+
+def recover_plaintext(ciphertext: bytes, pi: List[int], mask: bytes) -> bytes:
+    """Decrypt using only the recovered equivalent key, not the hidden seed."""
+    if len(ciphertext) != len(pi) or len(mask) != len(pi):
+        raise ValueError('ciphertext, permutation and mask lengths must match')
+    plaintext = bytearray(len(pi))
+    for j, i in enumerate(pi):
+        plaintext[i] = ciphertext[j] ^ mask[j]
+    return bytes(plaintext)
 
 
 def verify(cipher: FixedScheduleCipher, pi: List[int], R: bytes, trials: int = 10) -> bool:
@@ -85,7 +90,7 @@ def verify(cipher: FixedScheduleCipher, pi: List[int], R: bytes, trials: int = 1
         pt = bytes(rng.randrange(256) for _ in range(cipher.n))
         c_orig = cipher.encrypt(pt)
         c_rec = bytes(pt[pi[j]] ^ R[j] for j in range(cipher.n))
-        if c_orig != c_rec:
+        if c_orig != c_rec or recover_plaintext(c_orig, pi, R) != pt:
             return False
     return True
 
@@ -98,17 +103,21 @@ def main():
     parser.add_argument("--seed", type=int, default=42, help="PRNG seed for the toy cipher.")
     args = parser.parse_args()
 
+    if args.n < 1:
+        parser.error('--n must be positive')
     cipher = FixedScheduleCipher(args.n, args.seed)
     pi_rec, R_rec, queries = recover_equivalent_key(cipher)
 
     ok = verify(cipher, pi_rec, R_rec)
 
-    d = max(1, math.ceil(math.log(args.n, 256)))
+    d = ((args.n - 1).bit_length() + 7) // 8
     print(f"n = {args.n}, d = {d}")
     print(f"Queries used: 1 zero + {d} label = {queries} total")
     print(f"Permutation recovered: {pi_rec == cipher.pi}")
     print(f"Mask recovered:        {R_rec == cipher.R}")
-    print(f"Verification on random plaintexts: {'PASS' if ok else 'FAIL'}")
+    print(f"Encryption and unseen-plaintext recovery (10 trials): {'PASS' if ok else 'FAIL'}")
+    if not ok:
+        raise SystemExit(1)
     print()
     print("Scope: this attacks the fixed permutation-plus-XOR reference model only.")
     print("It does NOT break the full Lorenz-BLAKE3 prototype (random IV per message).")
