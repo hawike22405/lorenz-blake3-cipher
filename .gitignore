@@ -50,3 +50,6 @@ key.bin
 paper/*.aux
 paper/*.out
 paper/*.toc
+
+# Generated test/evaluation output (CLI checks, ablation logs, image tests with throwaway keys)
+review/
