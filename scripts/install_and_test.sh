@@ -21,6 +21,8 @@ ORIG_PWD="$PWD"
 KEEP_GOING=0
 SKIP_IMAGE=0
 SKIP_FETCH=0
+SKIP_METRICS=0
+TRIALS="${TRIALS:-20}"
 IMAGE_PATH="${IMAGE_PATH:-}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -28,7 +30,9 @@ while [[ $# -gt 0 ]]; do
     --image)      IMAGE_PATH="${2:-}"; shift ;;
     --no-image)   SKIP_IMAGE=1 ;;
     --no-fetch)   SKIP_FETCH=1 ;;
-    -h|--help)    sed -n '2,12p' "${BASH_SOURCE[0]}"; echo "Options: --image PATH | --no-image | --no-fetch | --keep-going"; exit 0 ;;
+    --no-metrics) SKIP_METRICS=1 ;;
+    --trials)     TRIALS="${2:-20}"; shift ;;
+    -h|--help)    sed -n '2,12p' "${BASH_SOURCE[0]}"; echo "Options: --image PATH | --no-image | --no-metrics | --trials N | --no-fetch | --keep-going"; exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
   shift
@@ -172,7 +176,7 @@ test_image() {
   local img="$1"
   local out="$ROOT/review/image_test/$(date +%Y%m%d-%H%M%S)"
   mkdir -p "$out" && chmod 700 "$out"
-  python - "$img" "$out" "$BIN" <<'PY'
+  python - "$img" "$out" "$BIN" "$ROOT" "$SKIP_METRICS" "$TRIALS" <<'PY'
 import subprocess, sys
 from pathlib import Path
 from PIL import Image
@@ -219,6 +223,14 @@ blob = (out/"image.lrz").read_bytes()
 payload = blob[81:81 + len(raw)]
 Image.frombytes(img.mode, (w, h), payload).save(out/"encrypted_preview.png")
 print("Saved original.png, recovered.png, encrypted_preview.png in", out)
+
+if sys.argv[5] != "1":
+    print("\n--- Research metrics (entropy, correlation, chi-square, NPCR/UACI, ...) ---")
+    r = subprocess.run([sys.executable, str(Path(sys.argv[4]) / "scripts" / "image_metrics.py"),
+                        "--binary", binary, "--raw", out/"input.raw", "--width", str(w), "--height", str(h),
+                        "--channels", str(channels), "--out-dir", out, "--trials", sys.argv[6]])
+    if r.returncode != 0:
+        sys.exit("metrics step failed")
 PY
 }
 
