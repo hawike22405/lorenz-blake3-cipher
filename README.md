@@ -19,13 +19,12 @@ bash scripts/install_and_test.sh
 
 The script can also be run on its own from any directory; it clones the repository itself if it is not inside a checkout. It:
 
-0. prints system metrics with `fastfetch` first (installs it non-interactively if possible, otherwise shows a basic CPU/memory/disk summary),
 1. installs a Rust toolchain through rustup if `cargo` is missing,
 2. builds the `lrz` binary (`--release --locked`),
 3. runs the Rust tests in debug and release mode,
 4. creates `.venv` and installs `requirements.txt`,
 5. runs the demo round trip, `scripts/check_cli.py`, `scripts/check_aead.py` and the toy attack script,
-6. **asks for the path to an image** and round-trips it through `lrz`,
+6. prints system metrics with `fastfetch` (installs it non-interactively if possible, otherwise shows a basic CPU/memory/disk summary), then **asks for the path to an image** and round-trips it through `lrz`,
 7. prints a PASS/FAIL summary and exits nonzero if any check failed.
 
 Requirements: `git`, `python3` with `venv` support, `curl` (only if Rust must be installed) and a C compiler (`build-essential` on Debian/Ubuntu, `xcode-select --install` on macOS). The first build downloads dependencies, so it needs network access.
