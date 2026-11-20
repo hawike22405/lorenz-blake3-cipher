@@ -9,12 +9,54 @@ This repository contains an experimental image-byte cipher, a fixed-schedule mod
 - The older Float64 RK4/plaintext-derived-IV experiments in the manuscript drafts are **another implementation**, not measurements of this repository. Do not attach their speed, memory or differential figures to either repository version.
 - `FIXED_PAPER.md`, `FIXED_PAPER.pdf`, and `docs/commands.pdf` are historical drafts. The new evaluator report and IEEE manuscript are delivered separately. Running the evaluation creates local `review/` results.
 
-## Install and run (Linux/macOS)
+## Quick start: one command (Linux/macOS)
+
+```bash
+git clone https://github.com/hawike22405/lorenz-blake3-cipher.git
+cd lorenz-blake3-cipher
+bash scripts/install_and_test.sh
+```
+
+The script can also be run on its own from any directory; it clones the repository itself if it is not inside a checkout. It:
+
+1. installs a Rust toolchain through rustup if `cargo` is missing,
+2. builds the `lrz` binary (`--release --locked`),
+3. runs the Rust tests in debug and release mode,
+4. creates `.venv` and installs `requirements.txt`,
+5. runs the demo round trip, `scripts/check_cli.py`, `scripts/check_aead.py` and the toy attack script,
+6. **asks for the path to an image** and round-trips it through `lrz`,
+7. prints a PASS/FAIL summary and exits nonzero if any check failed.
+
+Requirements: `git`, `python3` with `venv` support, `curl` (only if Rust must be installed) and a C compiler (`build-essential` on Debian/Ubuntu, `xcode-select --install` on macOS). The first build downloads dependencies, so it needs network access.
+
+| Option | Effect |
+| --- | --- |
+| `--image PATH` | Test this image without prompting (also settable as `IMAGE_PATH=...`) |
+| `--no-image` | Skip the image step |
+| `--keep-going` | Continue after a failing check instead of stopping |
+
+### Testing with your own image
+
+At the end of the script you are prompted:
+
+```
+Enter the path to an image to test (png/jpg/bmp/...), or press Enter to skip:
+```
+
+Quoted, drag-and-dropped, `~` and relative paths are accepted. Because `lrz` only handles raw bytes, the script converts the image with Pillow (L, LA, RGB and RGBA are kept; other modes become RGB or RGBA), then encrypts, verifies the tag, decrypts and requires the recovered bytes to equal the original. Raw size is limited to 64 MiB. Each run writes a new directory `review/image_test/<timestamp>/` containing:
+
+- `original.png`, `recovered.png`: should look identical,
+- `encrypted_preview.png`: the ciphertext payload drawn as an image,
+- `image.lrz`, `key.bin`, `input.raw`, `recovered.raw`: for manual use with `lrz`.
+
+`key.bin` is a throwaway test key; the folder is created with owner-only permissions. If no terminal is available the prompt is skipped; pass `--image` instead.
+
+## Manual install and run (Linux/macOS)
 
 Install a Rust toolchain through [rustup](https://rustup.rs). The reviewed build used Rust 1.100.0 on Linux x86-64; CI also passed debug and release tests on Linux, Windows and macOS; the Bash demo and file wrappers were exercised locally on Linux. Python 3 is needed for scripts. Do not regenerate Cargo.lock during an ordinary build.
 
 ```bash
-git clone --branch review/reproducibility-security https://github.com/hawike22405/lorenz-blake3-cipher.git
+git clone https://github.com/hawike22405/lorenz-blake3-cipher.git
 cd lorenz-blake3-cipher
 bash scripts/run.sh build
 bash scripts/run.sh test
@@ -24,21 +66,13 @@ bash scripts/run.sh evaluate
 
 `demo` generates synthetic 64×64 RGB raw data and a test key in a new temporary directory, encrypts, verifies, decrypts and compares bytes. `evaluate` writes all 500 ablation trial records and summaries to `review/`. Dependency downloads require network access on the first build.
 
-For Python image analysis and the AES-GCM wrapper, use a virtual environment:
+For Python image analysis and the AES-GCM wrapper, use a virtual environment (`install_and_test.sh` does this for you):
 
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -r requirements.txt
 ```
-
-## One-command install and test
-
-```bash
-bash scripts/install_and_test.sh
-```
-
-Installs Rust if missing, builds, runs the Rust tests, sets up `.venv`, runs the demo and check scripts, then asks for the path to an image and round-trips it through `lrz` (results in `review/image_test/`). Options: `--image PATH` (no prompt), `--no-image`, `--keep-going`.
 
 ## Raw image workflow
 
