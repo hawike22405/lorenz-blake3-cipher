@@ -20,13 +20,15 @@ REPO_DIR="${REPO_DIR:-lorenz-blake3-cipher}"
 ORIG_PWD="$PWD"
 KEEP_GOING=0
 SKIP_IMAGE=0
+SKIP_FETCH=0
 IMAGE_PATH="${IMAGE_PATH:-}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --keep-going) KEEP_GOING=1 ;;
     --image)      IMAGE_PATH="${2:-}"; shift ;;
     --no-image)   SKIP_IMAGE=1 ;;
-    -h|--help)    sed -n '2,12p' "${BASH_SOURCE[0]}"; echo "Options: --image PATH | --no-image | --keep-going"; exit 0 ;;
+    --no-fetch)   SKIP_FETCH=1 ;;
+    -h|--help)    sed -n '2,12p' "${BASH_SOURCE[0]}"; echo "Options: --image PATH | --no-image | --no-fetch | --keep-going"; exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
   shift
@@ -53,6 +55,49 @@ summary() {
   printf '\n%s==== Summary ====%s\n' "$bold" "$reset"
   printf '%s\n' "${RESULTS[@]}"
 }
+
+# --- system metrics (fastfetch) -----------------------------------------------
+# Shown first so the log records the machine the tests ran on. Best effort:
+# uses fastfetch if present, tries a non-interactive install, and otherwise
+# falls back to a basic summary. Skip with --no-fetch.
+install_fastfetch() {
+  local sudo_cmd=""
+  if [[ $EUID -ne 0 ]]; then
+    command -v sudo >/dev/null && sudo -n true 2>/dev/null && sudo_cmd="sudo -n" || sudo_cmd="none"
+  fi
+  if   command -v brew    >/dev/null; then brew install fastfetch >/dev/null 2>&1
+  elif [[ "$sudo_cmd" == "none" ]]; then return 1
+  elif command -v apt-get >/dev/null; then $sudo_cmd apt-get install -y fastfetch >/dev/null 2>&1
+  elif command -v dnf     >/dev/null; then $sudo_cmd dnf install -y fastfetch >/dev/null 2>&1
+  elif command -v pacman  >/dev/null; then $sudo_cmd pacman -S --noconfirm fastfetch >/dev/null 2>&1
+  elif command -v zypper  >/dev/null; then $sudo_cmd zypper -n install fastfetch >/dev/null 2>&1
+  else return 1; fi
+}
+basic_sysinfo() {
+  echo "(fastfetch not available; basic system info)"
+  echo "OS:      $(. /etc/os-release 2>/dev/null && echo "${PRETTY_NAME:-}" || true) $(uname -srm)"
+  echo "Host:    $(hostname)"
+  if command -v lscpu >/dev/null; then echo "CPU:     $(lscpu | sed -n 's/^Model name:[[:space:]]*//p' | head -1) ($(nproc) threads)"
+  else echo "CPU:     $(sysctl -n machdep.cpu.brand_string 2>/dev/null || uname -p) ($(getconf _NPROCESSORS_ONLN 2>/dev/null) threads)"; fi
+  if command -v free >/dev/null; then echo "Memory:  $(free -h | awk '/^Mem:/{print $3" used / "$2" total"}')"
+  elif command -v sysctl >/dev/null; then echo "Memory:  $(( $(sysctl -n hw.memsize 2>/dev/null || echo 0) / 1073741824 )) GiB total"; fi
+  echo "Disk:    $(df -h . | awk 'NR==2{print $3" used / "$2" total ("$5")"}')"
+  echo "Uptime:  $(uptime -p 2>/dev/null || uptime)"
+}
+show_system_info() {
+  [[ $SKIP_FETCH -eq 1 ]] && return 0
+  step "System metrics"
+  if ! command -v fastfetch >/dev/null; then
+    echo "fastfetch not found; trying to install it (skipped if this needs a password)..."
+    install_fastfetch || true
+  fi
+  if command -v fastfetch >/dev/null; then
+    fastfetch || basic_sysinfo
+  else
+    basic_sysinfo
+  fi
+}
+show_system_info
 
 # --- 0. prerequisites ---------------------------------------------------------
 command -v git >/dev/null     || die "git is required."

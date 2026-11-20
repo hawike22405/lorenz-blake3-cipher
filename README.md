@@ -19,6 +19,7 @@ bash scripts/install_and_test.sh
 
 The script can also be run on its own from any directory; it clones the repository itself if it is not inside a checkout. It:
 
+0. prints system metrics with `fastfetch` first (installs it non-interactively if possible, otherwise shows a basic CPU/memory/disk summary),
 1. installs a Rust toolchain through rustup if `cargo` is missing,
 2. builds the `lrz` binary (`--release --locked`),
 3. runs the Rust tests in debug and release mode,
@@ -33,6 +34,7 @@ Requirements: `git`, `python3` with `venv` support, `curl` (only if Rust must be
 | --- | --- |
 | `--image PATH` | Test this image without prompting (also settable as `IMAGE_PATH=...`) |
 | `--no-image` | Skip the image step |
+| `--no-fetch` | Skip the system metrics (fastfetch) display |
 | `--keep-going` | Continue after a failing check instead of stopping |
 
 ### Testing with your own image
