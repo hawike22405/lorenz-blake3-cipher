@@ -32,6 +32,14 @@ python3 -m venv .venv
 python -m pip install -r requirements.txt
 ```
 
+## One-command install and test
+
+```bash
+bash scripts/install_and_test.sh
+```
+
+Installs Rust if missing, builds, runs the Rust tests, sets up `.venv`, runs the demo and check scripts, then asks for the path to an image and round-trips it through `lrz` (results in `review/image_test/`). Options: `--image PATH` (no prompt), `--no-image`, `--keep-going`.
+
 ## Raw image workflow
 
 `lrz` reads **raw interleaved bytes**, not PNG/JPEG. Preserve width, height and channel count when converting an image. L, LA, RGB and RGBA use 1, 2, 3 and 4 channels. Decoded pixel equality does not mean identical PNG metadata/compression.
