@@ -61,7 +61,7 @@ summary() {
 }
 
 # --- system metrics (fastfetch) -----------------------------------------------
-# Shown first so the log records the machine the tests ran on. Best effort:
+# Shown right before the image-path prompt so the output records the machine. Best effort:
 # uses fastfetch if present, tries a non-interactive install, and otherwise
 # falls back to a basic summary. Skip with --no-fetch.
 install_fastfetch() {
@@ -101,7 +101,6 @@ show_system_info() {
     basic_sysinfo
   fi
 }
-show_system_info
 
 # --- 0. prerequisites ---------------------------------------------------------
 command -v git >/dev/null     || die "git is required."
@@ -245,6 +244,8 @@ resolve_path() {  # expand ~ and strip quotes/whitespace that come from drag-and
 }
 
 if [[ $SKIP_IMAGE -eq 0 ]]; then
+  # Show system metrics right before asking for the image path.
+  show_system_info
   step "Test with your own image"
   img=""
   if [[ -n "$IMAGE_PATH" ]]; then
