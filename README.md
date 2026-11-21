@@ -68,7 +68,7 @@ python3 -c 'import os; f=os.open("key.bin",os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o60
 ./code/target/release/lrz decrypt --key key.bin --input image.lrz --output recovered.raw
 ```
 
-Channels are 1 (L), 2 (LA), 3 (RGB) or 4 (RGBA). Output files are never overwritten, and a failed authentication writes nothing. Keep keys separate from ciphertext. There is no replay or nonce-reuse detection. The 64 MiB limit caps payload bytes, not total memory, which is several times higher.
+Channels are 1 (L), 2 (LA), 3 (RGB) or 4 (RGBA). Output files are never overwritten, and a failed authentication writes nothing. Keep keys separate from ciphertext. There is no replay or nonce-reuse detection. The 256 MiB limit caps payload bytes, not total memory, which is several times higher.
 
 ## Evaluate the cipher
 
@@ -135,7 +135,7 @@ It uses a fresh 96-bit random nonce and an authenticated header (`AESFILE1`, 36 
 
 ## Versions and compatibility
 
-- **`LRZIMG02` (this version):** `OsRng` nonce and IV, checked geometry (1–4 channels, positive dimensions, at most 64 MiB), strict lengths, constant-time tag comparison, BLAKE3 XOF with rejection sampling, rescaled Q32.32 Euler arithmetic and corrected feedback. It permutes bytes, not whole pixels. Container overhead is 113 bytes. See [ARCHITECTURE.md](ARCHITECTURE.md) for the exact specification.
+- **`LRZIMG02` (this version):** `OsRng` nonce and IV, checked geometry (1–4 channels, positive dimensions, at most 256 MiB), strict lengths, constant-time tag comparison, BLAKE3 XOF with rejection sampling, rescaled Q32.32 Euler arithmetic and corrected feedback. It permutes bytes, not whole pixels. Container overhead is 113 bytes. See [ARCHITECTURE.md](ARCHITECTURE.md) for the exact specification.
 - **`LRZIMG01` (commit `69465bc`):** intentionally incompatible. Its CLI seeded `StdRng` with 42 on every run, so nonce, IV and ciphertext repeated, and it accepted trailing bytes and inconsistent geometry.
 - **Older drafts:** `FIXED_PAPER.md` and `FIXED_PAPER.pdf` describe an earlier Float64 RK4 implementation. Do not attach their speed, memory or differential figures to this repository.
 

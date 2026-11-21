@@ -30,8 +30,8 @@ def main():
             p.error('select --mode L, LA, RGB or RGBA for this input format')
         w, h = source.size
         channels = len(mode)
-        if not w or not h or w * h * channels > 64 * 1024 * 1024:
-            p.error('decoded image exceeds the 64 MiB payload limit')
+        if not w or not h or w * h * channels > 256 * 1024 * 1024:
+            p.error('decoded image exceeds the 256 MiB payload limit')
         plain = source.convert(mode).tobytes()
     a.output_dir.mkdir(mode=0o700, parents=True, exist_ok=False)
     key = a.output_dir / 'demo.key'

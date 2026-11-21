@@ -4,7 +4,7 @@ This document replaces the inaccurate original architecture description. The cod
 
 ## Container and parsing
 
-Header: ASCII `LRZIMG02` (8 bytes), width u32-LE (4), height u32-LE (4), channel count (1), nonce (32), random IV (32). Payload is exactly width × height × channels bytes; tag is 32 bytes. Overhead: 113 bytes. Zero dimensions, channel counts outside 1–4, overflow, more than 64 MiB and trailing/truncated bytes are rejected. The raw API checks payload/geometry consistency. The CLI limits input reads, refuses existing outputs and never writes on authentication failure. Parser allocation still occurs before MAC verification but is explicitly bounded.
+Header: ASCII `LRZIMG02` (8 bytes), width u32-LE (4), height u32-LE (4), channel count (1), nonce (32), random IV (32). Payload is exactly width × height × channels bytes; tag is 32 bytes. Overhead: 113 bytes. Zero dimensions, channel counts outside 1–4, overflow, more than 256 MiB and trailing/truncated bytes are rejected. The raw API checks payload/geometry consistency. The CLI limits input reads, refuses existing outputs and never writes on authentication failure. Parser allocation still occurs before MAC verification but is explicitly bounded.
 
 ## Domains and keys
 

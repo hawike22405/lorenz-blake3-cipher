@@ -181,7 +181,7 @@ from pathlib import Path
 from PIL import Image
 
 src, out, binary = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
-LIMIT = 64 * 1024 * 1024
+LIMIT = 256 * 1024 * 1024
 
 img = Image.open(src)
 img.load()
@@ -192,7 +192,7 @@ channels = len(img.getbands())
 w, h = img.size
 raw = img.tobytes()
 if len(raw) > LIMIT:
-    sys.exit(f"Image is {len(raw)} bytes raw; the cipher limit is {LIMIT} (64 MiB). Use a smaller image.")
+    sys.exit(f"Image is {len(raw)} bytes raw; the cipher limit is {LIMIT} (256 MiB). Use a smaller image.")
 
 (out / "key.bin").write_bytes(__import__("os").urandom(32))
 (out / "key.bin").chmod(0o600)

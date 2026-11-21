@@ -18,7 +18,7 @@
 use blake3::Hasher;
 use rand::{CryptoRng, RngCore};
 use subtle::ConstantTimeEq;
-pub const MAX_PAYLOAD: usize = 64 * 1024 * 1024;
+pub const MAX_PAYLOAD: usize = 256 * 1024 * 1024;
 
 pub fn payload_len(width: u32, height: u32, channels: u8) -> Option<usize> {
     if width == 0 || height == 0 || !(1..=4).contains(&channels) {
