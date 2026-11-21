@@ -88,14 +88,49 @@ fn payload_stream(keys: &Keys, iv: &[u8; 32], n: usize) -> Vec<u8> {
     out
 }
 
-fn bounded(reader: &mut blake3::OutputReader, bound: usize) -> usize {
+/// Buffered u64-LE draws from a BLAKE3 XOF.
+///
+/// Reading the XOF in large blocks yields exactly the same byte stream as
+/// many 8-byte reads, but avoids recomputing a BLAKE3 output block on every
+/// tiny read (which made the permutation shuffle ~30x slower). The container
+/// format and all outputs are unchanged.
+struct Draws {
+    reader: blake3::OutputReader,
+    buf: Vec<u8>,
+    pos: usize,
+}
+
+impl Draws {
+    const BLOCK: usize = 8192;
+
+    fn new(reader: blake3::OutputReader) -> Self {
+        Draws {
+            reader,
+            buf: vec![0; Self::BLOCK],
+            pos: Self::BLOCK,
+        }
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        if self.pos == Self::BLOCK {
+            self.reader.fill(&mut self.buf);
+            self.pos = 0;
+        }
+        let x = u64::from_le_bytes(self.buf[self.pos..self.pos + 8].try_into().unwrap());
+        self.pos += 8;
+        x
+    }
+}
+
+fn bounded(draws: &mut Draws, bound: usize) -> usize {
     let bound = bound as u64;
-    let threshold = bound.wrapping_neg() % bound;
     loop {
-        let mut b = [0; 8];
-        reader.fill(&mut b);
-        let x = u64::from_le_bytes(b);
-        if x >= threshold {
+        let x = draws.next_u64();
+        // threshold = (-bound mod 2^64) mod bound is always < bound, so any
+        // draw x >= bound is accepted without computing it. The division is
+        // only needed in the (astronomically rare) case x < bound. This is
+        // exactly the original rejection rule.
+        if x >= bound || x >= bound.wrapping_neg() % bound {
             return (x % bound) as usize;
         }
     }
@@ -133,7 +168,7 @@ fn blake3_keyed(key: &[u8; 32], context: &[u8], input: &[u8]) -> [u8; 32] {
 fn build_sbox(key: &[u8; 32]) -> [u8; 256] {
     let mut sbox = core::array::from_fn(|i| i as u8);
     let seed = blake3_keyed(key, b"lrz02-sbox", &[]);
-    let mut reader = Hasher::new_keyed(&seed).finalize_xof();
+    let mut reader = Draws::new(Hasher::new_keyed(&seed).finalize_xof());
     for i in (1..256).rev() {
         let j = bounded(&mut reader, i + 1);
         sbox.swap(i, j);
@@ -181,7 +216,7 @@ pub fn derive_keys(master_key: &[u8; 32], nonce: &[u8; 32]) -> Keys {
 fn fisher_yates_perm(n: usize, enc_key: &[u8; 32]) -> Vec<usize> {
     let mut perm: Vec<usize> = (0..n).collect();
     let seed = blake3_keyed(enc_key, b"lrz02-permutation", &[]);
-    let mut reader = Hasher::new_keyed(&seed).finalize_xof();
+    let mut reader = Draws::new(Hasher::new_keyed(&seed).finalize_xof());
     for i in (1..n).rev() {
         let j = bounded(&mut reader, i + 1);
         perm.swap(i, j);
@@ -742,5 +777,56 @@ mod review_tests {
             }
         }
         println!("]\nREVIEW_JSON_END");
+    }
+}
+
+#[cfg(test)]
+mod draw_equivalence_tests {
+    use super::*;
+
+    /// The original (slow) definition: one 8-byte XOF read per draw and the
+    /// threshold computed on every call.
+    fn bounded_reference(reader: &mut blake3::OutputReader, bound: usize) -> usize {
+        let bound = bound as u64;
+        let threshold = bound.wrapping_neg() % bound;
+        loop {
+            let mut b = [0; 8];
+            reader.fill(&mut b);
+            let x = u64::from_le_bytes(b);
+            if x >= threshold {
+                return (x % bound) as usize;
+            }
+        }
+    }
+
+    #[test]
+    fn buffered_draws_match_unbuffered_reference() {
+        let seed = blake3_keyed(&[9; 32], b"lrz02-permutation", &[]);
+        let mut reference = Hasher::new_keyed(&seed).finalize_xof();
+        let mut buffered = Draws::new(Hasher::new_keyed(&seed).finalize_xof());
+        // Crosses several 8 KiB refills and uses small, medium and huge bounds.
+        for bound in (2..30_000usize).chain([1 << 20, (1 << 32) + 7, 268_435_457]) {
+            assert_eq!(
+                bounded(&mut buffered, bound),
+                bounded_reference(&mut reference, bound),
+                "draw mismatch at bound {bound}"
+            );
+        }
+    }
+
+    #[test]
+    fn shuffle_output_is_unchanged() {
+        // Reference Fisher-Yates built on the original unbuffered draws.
+        let key = [0x66u8; 32];
+        for n in [1usize, 2, 3, 255, 256, 1000, 100_003] {
+            let mut expected: Vec<usize> = (0..n).collect();
+            let seed = blake3_keyed(&key, b"lrz02-permutation", &[]);
+            let mut reader = Hasher::new_keyed(&seed).finalize_xof();
+            for i in (1..n).rev() {
+                let j = bounded_reference(&mut reader, i + 1);
+                expected.swap(i, j);
+            }
+            assert_eq!(fisher_yates_perm(n, &key), expected, "n = {n}");
+        }
     }
 }
