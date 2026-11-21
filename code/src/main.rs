@@ -126,7 +126,7 @@ fn read_input(path: &PathBuf) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
         .take((cipher::MAX_PAYLOAD + 114) as u64)
         .read_to_end(&mut buf)?;
     if buf.len() > cipher::MAX_PAYLOAD + 113 {
-        return Err("input exceeds 64 MiB policy".into());
+        return Err("input exceeds 256 MiB policy".into());
     }
     Ok(buf)
 }
