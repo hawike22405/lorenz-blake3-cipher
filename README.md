@@ -161,6 +161,19 @@ It uses a fresh 96-bit random nonce and an authenticated header (`AESFILE1`, 36 
 - **Not claimed:** NIST SP 800-22 results, CPA resistance, 256-bit security, a construction-level forgery bound, cross-platform interoperability beyond CI, a speed advantage over standard ciphers, or publication acceptance. A 256-bit key and a 32-byte tag do not establish any of these.
 - **Throughput:** about 5 MB/s end to end for a 3072×1728 RGB image on a Ryzen 5 7235HS, including process start and file I/O.
 
+### Maximum image size
+
+The limit is on payload bytes, not pixels: `width × height × channels` must be at most 256 MiB (268,435,456 bytes). The largest image therefore depends on the channel count. The "K" column is the width in thousands of pixels for a 16:9 image.
+
+| Image type | Channels | Max pixels | Max size at 16:9 | Max "K" |
+| --- | --- | --- | --- | --- |
+| RGB (colour) | 3 | 89,478,485 | about 12,600 × 7,090 | about 12.6K |
+| RGBA (colour with transparency) | 4 | 67,108,864 | about 10,900 × 6,140 | about 10.9K |
+| Grayscale + alpha (LA) | 2 | 134,217,728 | about 15,400 × 8,680 | about 15.4K |
+| Grayscale (L) | 1 | 268,435,456 | about 21,800 × 12,280 | about 21.8K |
+
+For a normal colour photo this is about 12K. Standard 8K UHD (7,680 × 4,320) and DCI 8K (8,192 × 4,320) fit even as RGBA, and 10K (10,240 × 4,320 or 10,240 × 5,760) fits as RGB or RGBA. 16K does not fit. Larger images are rejected before encryption. Memory use is several times the payload size, so the largest images need a lot of RAM. These limits come from the size cap in the code and were not benchmarked at the largest sizes.
+
 ## Versions and compatibility
 
 - **`LRZIMG02` (this version):** `OsRng` nonce and IV, checked geometry (1–4 channels, positive dimensions, at most 256 MiB), strict lengths, constant-time tag comparison, BLAKE3 XOF with rejection sampling, rescaled Q32.32 Euler arithmetic and corrected feedback. It permutes bytes, not whole pixels. Container overhead is 113 bytes. See [ARCHITECTURE.md](ARCHITECTURE.md) for the exact specification.
