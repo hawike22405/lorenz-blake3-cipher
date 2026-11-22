@@ -1,0 +1,75 @@
+name: build-and-release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            bin: lrz.exe
+            asset: lrz-windows-x86_64.exe
+          - os: ubuntu-latest
+            bin: lrz
+            asset: lrz-linux-x86_64
+          - os: macos-latest
+            bin: lrz
+            asset: lrz-macos-aarch64
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Generic release build: no target-cpu=native, no fast-math/FMA,
+      # so the float64 Lorenz trajectory matches the known-answer vectors.
+      - name: Test (includes known-answer vectors)
+        run: cargo test --manifest-path code/Cargo.toml --locked --release
+
+      - name: Build
+        run: cargo build --manifest-path code/Cargo.toml --locked --release
+
+      - name: Smoke test (encrypt, verify, decrypt round trip)
+        run: |
+          BIN=code/target/release/${{ matrix.bin }}
+          head -c 32 /dev/urandom > smoke.key
+          head -c 196608 /dev/urandom > smoke.raw
+          "$BIN" encrypt --key smoke.key --input smoke.raw --output smoke.lrz --width 256 --height 256 --channels 3
+          "$BIN" verify  --key smoke.key --input smoke.lrz
+          "$BIN" decrypt --key smoke.key --input smoke.lrz --output smoke.out
+          cmp smoke.raw smoke.out
+
+      - name: Stage asset
+        run: cp code/target/release/${{ matrix.bin }} ${{ matrix.asset }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/lrz-*
+          generate_release_notes: true
