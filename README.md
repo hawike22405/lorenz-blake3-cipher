@@ -8,6 +8,7 @@ An experimental image-byte cipher built from a fixed-point Lorenz map and keyed 
 ## Contents
 
 - [Project report and documentation](#project-report-and-documentation)
+- [Flowchart](#flowchart)
 - [Quick start](#quick-start)
 - [Windows install](#windows)
 - [Encrypt your own image](#encrypt-your-own-image)
@@ -22,6 +23,14 @@ An experimental image-byte cipher built from a fixed-point Lorenz map and keyed 
 
 - [Adamas University project report (PDF)](docs/Lorenz_BLAKE3_Project_Report_Adamas_Format.pdf)
 - [Repository documentation on DeepWiki](https://deepwiki.com/hawike22405/lorenz-blake3-cipher/)
+
+## Flowchart
+
+Step-by-step install and usage flowcharts with copy-paste commands. Click your operating system to open the full-size image:
+
+- [Windows flowchart](https://raw.githubusercontent.com/hawike22405/lorenz-blake3-cipher/master/docs/flowcharts/flowchart-windows.png)
+- [Linux flowchart](https://raw.githubusercontent.com/hawike22405/lorenz-blake3-cipher/master/docs/flowcharts/flowchart-linux.png)
+- [macOS flowchart](https://raw.githubusercontent.com/hawike22405/lorenz-blake3-cipher/master/docs/flowcharts/flowchart-macos.png)
 
 ## Quick start
 
@@ -164,6 +173,7 @@ It uses a fresh 96-bit random nonce and an authenticated header (`AESFILE1`, 36 
 | --- | --- |
 | `code/` | Rust crate (`lrz` binary, cipher library, tests) |
 | `scripts/` | Installer, runner, image demo, metrics, CLI checks, AES-GCM tool, NIST helper |
+| `docs/` | Project report, command reference and `flowcharts/` (install and usage flowcharts for Windows, Linux and macOS) |
 | `analysis/` | Entropy, correlation, NPCR/UACI helpers |
 | `attack/` | Toy equivalent-key attack |
 | `ARCHITECTURE.md` | Normative `LRZIMG02` specification |
