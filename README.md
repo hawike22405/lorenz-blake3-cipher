@@ -9,6 +9,7 @@ An experimental image-byte cipher built from a fixed-point Lorenz map and keyed 
 
 - [Project report and documentation](#project-report-and-documentation)
 - [Quick start](#quick-start)
+- [Windows install](#windows)
 - [Encrypt your own image](#encrypt-your-own-image)
 - [Evaluate the cipher](#evaluate-the-cipher)
 - [NIST SP 800-22 randomness tests](#nist-sp-800-22-randomness-tests)
@@ -52,7 +53,19 @@ bash scripts/run.sh demo        # synthetic encrypt → verify → decrypt round
 bash scripts/run.sh evaluate    # 500-trial ablation, writes review/
 ```
 
-Windows: the Rust tests run in CI on Windows, but the scripts above are only exercised on Linux. Build with `cargo build --release --locked --manifest-path code/Cargo.toml`.
+### Windows
+
+Windows has no Rust or Docker requirement. Once a release exists, install the prebuilt `lrz.exe` from PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/hawike22405/lorenz-blake3-cipher/master/install.ps1 | iex
+```
+
+This downloads `lrz-windows-x86_64.exe` from the [latest release](https://github.com/hawike22405/lorenz-blake3-cipher/releases/latest), saves it as `%LOCALAPPDATA%\lrz\lrz.exe` and adds that folder to your user `PATH`. Open a new terminal, then run `lrz --help`. You can also download the `.exe` from the Releases page yourself.
+
+Release binaries for Windows, Linux (`lrz-linux-x86_64`) and macOS (`lrz-macos-aarch64`, Apple Silicon only) are built by GitHub Actions when a `v*` tag is pushed. They are generic x86-64 release builds with no `target-cpu=native` and no fast-math or FMA, so the float64 results match the frozen test vector. For timing numbers, build locally and record the CPU, Rust version and flags.
+
+To build from source instead, with Rust installed: `cargo build --release --locked --manifest-path code/Cargo.toml`. The scripts above are only exercised on Linux; the Rust tests run in CI on Windows.
 
 ## Encrypt your own image
 
