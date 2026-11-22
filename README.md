@@ -7,6 +7,7 @@ An experimental image-byte cipher built from a fixed-point Lorenz map and keyed 
 
 ## Contents
 
+- [Project report and documentation](#project-report-and-documentation)
 - [Quick start](#quick-start)
 - [Encrypt your own image](#encrypt-your-own-image)
 - [Evaluate the cipher](#evaluate-the-cipher)
@@ -15,6 +16,11 @@ An experimental image-byte cipher built from a fixed-point Lorenz map and keyed 
 - [Findings and limits](#findings-and-limits)
 - [Versions and compatibility](#versions-and-compatibility)
 - [Repository layout](#repository-layout)
+
+## Project report and documentation
+
+- [Adamas University project report (PDF)](docs/Lorenz_BLAKE3_Project_Report_Adamas_Format.pdf)
+- [Repository documentation on DeepWiki](https://deepwiki.com/hawike22405/lorenz-blake3-cipher/)
 
 ## Quick start
 
@@ -137,7 +143,7 @@ It uses a fresh 96-bit random nonce and an authenticated header (`AESFILE1`, 36 
 
 - **`LRZIMG02` (this version):** `OsRng` nonce and IV, checked geometry (1–4 channels, positive dimensions, at most 256 MiB), strict lengths, constant-time tag comparison, BLAKE3 XOF with rejection sampling, rescaled Q32.32 Euler arithmetic and corrected feedback. It permutes bytes, not whole pixels. Container overhead is 113 bytes. See [ARCHITECTURE.md](ARCHITECTURE.md) for the exact specification.
 - **`LRZIMG01` (commit `69465bc`):** intentionally incompatible. Its CLI seeded `StdRng` with 42 on every run, so nonce, IV and ciphertext repeated, and it accepted trailing bytes and inconsistent geometry.
-- **Older drafts:** `FIXED_PAPER.md` and `FIXED_PAPER.pdf` describe an earlier Float64 RK4 implementation. Do not attach their speed, memory or differential figures to this repository.
+- **Earlier Float64 RK4 implementation:** Its speed, memory and differential results apply to that implementation.
 
 ## Repository layout
 

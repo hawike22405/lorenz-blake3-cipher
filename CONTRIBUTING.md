@@ -13,7 +13,7 @@ This is a **research prototype** with **no security proof**. It is **not** suita
 
 ## Before Contributing
 
-1. **Read the paper**: `FIXED_PAPER.md` contains the research context and limitations
+1. **Read the [project report](docs/Lorenz_BLAKE3_Project_Report_Adamas_Format.pdf)** for the research context and limitations
 2. **Understand the scope**: This cipher does not claim IND-CPA, INT-CTXT, or 256-bit security
 3. **Check existing issues**: See if your idea or bug report already exists
 
@@ -41,7 +41,7 @@ Include:
 
 - Update `ARCHITECTURE.md` for design changes
 - Update `README.md` for usage changes
-- Update `FIXED_PAPER.md` for research claims
+- Include reproducible evidence for changes to research claims
 
 ## Code Style
 
