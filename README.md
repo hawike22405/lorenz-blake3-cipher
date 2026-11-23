@@ -1,4 +1,4 @@
-# Lorenz–BLAKE3 Image Cipher
+# Lorenz–BLAKE3 Image Cipher. 
 
 An experimental image-byte cipher built from a fixed-point Lorenz map and keyed BLAKE3, with a reproducible evaluation toolkit and a separate AES-256-GCM file tool.
 
