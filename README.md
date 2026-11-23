@@ -1,4 +1,4 @@
-# Lorenz–BLAKE3 Image Cipher. 
+# Lorenz–BLAKE3 Image Cipher
 
 An experimental image-byte cipher built from a fixed-point Lorenz map and keyed BLAKE3, with a reproducible evaluation toolkit and a separate AES-256-GCM file tool.
 
@@ -20,7 +20,6 @@ An experimental image-byte cipher built from a fixed-point Lorenz map and keyed 
 - [Repository layout](#repository-layout)
 
 ## Project report and documentation
-
 - [Adamas University project report (PDF)](docs/Lorenz_BLAKE3_Project_Report_Adamas_Format.pdf)
 - [Repository documentation on DeepWiki](https://deepwiki.com/hawike22405/lorenz-blake3-cipher/)
 
@@ -181,7 +180,6 @@ For a normal colour photo this is about 12K. Standard 8K UHD (7,680 × 4,320) an
 - **Earlier Float64 RK4 implementation:** Its speed, memory and differential results apply to that implementation.
 
 ## Repository layout
-
 | Path | Contents |
 | --- | --- |
 | `code/` | Rust crate (`lrz` binary, cipher library, tests) |
