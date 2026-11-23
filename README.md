@@ -180,6 +180,7 @@ For a normal colour photo this is about 12K. Standard 8K UHD (7,680 × 4,320) an
 - **Earlier Float64 RK4 implementation:** Its speed, memory and differential results apply to that implementation.
 
 ## Repository layout
+
 | Path | Contents |
 | --- | --- |
 | `code/` | Rust crate (`lrz` binary, cipher library, tests) |
